@@ -1,0 +1,3 @@
+package com.bql.feedback.model;
+
+public enum EscalationReason { RESPONSE_OVERDUE, RESOLVE_OVERDUE, CRITICAL_PRIORITY, REPEATED_REOPEN, STAFF_ATTITUDE_OR_ABUSE, MANUAL }
