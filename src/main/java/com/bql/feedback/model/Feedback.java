@@ -18,7 +18,6 @@ public class Feedback {
     private String serviceName; // CF04 - dịch vụ liên quan
     private String location; // Vị trí: block/tầng/khu vực
     private String apartmentCode;
-    private Channel channel;
     private Priority priority;
     private FeedbackStatus status;
     private LocalDateTime createdAt;
@@ -46,9 +45,9 @@ public class Feedback {
     private LocalDateTime deletedAt; // Xóa mềm - không xóa vật lý khiếu nại đã tiếp nhận
 
     public Feedback(String code, Long customerId, FeedbackType type, String title, String content,
-                    Channel channel, LocalDateTime createdAt) {
+                     LocalDateTime createdAt) {
         this.code = code; this.customerId = customerId; this.type = type;
-        this.title = title; this.content = content; this.channel = channel;
+        this.title = title; this.content = content;
         this.createdAt = createdAt; this.updatedAt = createdAt;
         this.status = FeedbackStatus.NEW; this.priority = Priority.NORMAL;
         this.afterHours = isOutsideOfficeHours(createdAt);
@@ -80,8 +79,6 @@ public class Feedback {
     public void setLocation(String location) { this.location = location; }
     public String getApartmentCode() { return apartmentCode; }
     public void setApartmentCode(String apartmentCode) { this.apartmentCode = apartmentCode; }
-    public Channel getChannel() { return channel; }
-    public void setChannel(Channel channel) { this.channel = channel; }
     public Priority getPriority() { return priority; }
     public void setPriority(Priority priority) { this.priority = priority; }
     public FeedbackStatus getStatus() { return status; }
