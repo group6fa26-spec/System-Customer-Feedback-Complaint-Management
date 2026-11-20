@@ -25,6 +25,7 @@ public interface FeedbackRepository extends Repository<Feedback, Long> {
     <S extends Feedback> S save(S feedback);
 
     // ---------- Read ----------
+    List<Feedback> findByDeletedAtIsNull();
     Optional<Feedback> findByIdAndDeletedAtIsNull(Long id);
     Optional<Feedback> findByCodeAndDeletedAtIsNull(String code);
 

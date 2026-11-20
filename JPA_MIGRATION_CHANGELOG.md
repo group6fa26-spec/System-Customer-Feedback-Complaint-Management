@@ -175,3 +175,63 @@
   - Quét và nạp thành công toàn bộ **10 JPA repository interfaces**.
   - Khởi tạo thành công `EntityManagerFactory` và sinh schema trên H2 in-memory mà không có lỗi `Not a managed type` hay lỗi cú pháp SQL.
   - `FeedbackApplicationTests.contextLoads()`: **PASSED** (`Tests run: 1, Failures: 0, Errors: 0, Skipped: 0`, `BUILD SUCCESS`).
+
+---
+
+## 5. Nhật ký chỉnh sửa bổ sung: Sửa lỗi biên dịch trong `FeedbackService` & bổ sung truy vấn đọc cho `FeedbackRepository`
+
+- **Ngày:** 2026-11-20
+- **Mục tiêu:** Khắc phục 2 lỗi biên dịch (`cannot find symbol: method findAll()` và `cannot find symbol: method findById(Long)`) trong `FeedbackService` do `FeedbackRepository` cố ý kế thừa `Repository<Feedback, Long>` (không dùng `JpaRepository` để đảm bảo quy tắc xóa mềm và cấm xóa vật lý).
+- **Phạm vi:** Chỉnh sửa **2 file** Java (`FeedbackRepository.java`, `FeedbackService.java`).
+
+### Chi tiết thay đổi
+
+1. **`src/main/java/com/bql/feedback/repository/FeedbackRepository.java`**
+   - **Thêm:** Method `List<Feedback> findByDeletedAtIsNull();` trong nhóm `Read` để lấy toàn bộ phiếu chưa bị xóa mềm (`deletedAt is null`), giữ nguyên việc kế thừa `Repository<Feedback, Long>`.
+
+2. **`src/main/java/com/bql/feedback/service/FeedbackService.java`**
+   - **Sửa:** Trong `getAllFeedbacks()`, đổi `feedbackRepository.findAll()` thành `feedbackRepository.findByDeletedAtIsNull()`.
+   - **Sửa:** Trong `getFeedbackById(Long id)`, đổi `feedbackRepository.findById(id)` thành `feedbackRepository.findByIdAndDeletedAtIsNull(id)`.
+
+### Kết quả kiểm tra
+
+- **Lệnh chạy:** `.\mvnw.cmd test-compile -o`
+- **Kết quả:** Biên dịch thành công toàn bộ 32 file nguồn Java (`BUILD SUCCESS`), không còn lỗi `cannot find symbol`.
+
+---
+
+## 6. Nhật ký bổ sung API đọc (DTO, Service, Controller) cho `Customer`, `Staff`, `FeedbackCategory`
+
+- **Ngày:** 2026-11-20
+- **Mục tiêu:** Nhân bản đúng cấu trúc 3 tầng (`ResponseDto`, `Service`, `Controller`) tương tự `Feedback` cho 3 thực thể: `Customer`, `Staff` và `FeedbackCategory`.
+- **Phạm vi:** Thêm mới **9 file** Java trong các package `dto`, `service`, `controller`.
+
+### Danh sách 9 file thêm mới
+
+| Nhóm | DTO (`dto/`) | Service (`service/`) | Controller (`controller/`) | Base URL |
+|---|---|---|---|---|
+| `Customer` | `CustomerResponseDto.java` | `CustomerService.java` | `CustomerController.java` | `/api/customers` |
+| `Staff` | `StaffResponseDto.java` | `StaffService.java` | `StaffController.java` | `/api/staff` |
+| `FeedbackCategory` | `FeedbackCategoryResponseDto.java` | `FeedbackCategoryService.java` | `FeedbackCategoryController.java` | `/api/categories` |
+
+### Chi tiết triển khai
+
+1. **`Customer` (`/api/customers`)**
+   - `CustomerResponseDto`: record chứa `id`, `fullName`, `phone`, `email`, `apartmentCode`, `verifiedResident`, `active`, `blocked`, `spamStrikes`, `ratingTrustScore`, `createdAt`.
+   - `CustomerService`: cung cấp `getAllCustomers()` (`findAll()`) và `getCustomerById(Long id)` (`findById(id)`), chuyển đổi entity sang DTO qua `toDto(Customer)`.
+   - `CustomerController`: cung cấp `GET /api/customers` và `GET /api/customers/{id}`.
+
+2. **`Staff` (`/api/staff`)**
+   - `StaffResponseDto`: record chứa `id`, `fullName`, `role` (`String`), `department` (`String`), `active`, `onDuty`.
+   - `StaffService`: cung cấp `getAllStaff()` (`findAll()`) và `getStaffById(Long id)` (`findById(id)`), ánh xạ enum `Role` và `Department` sang tên chuỗi (`name()`).
+   - `StaffController`: cung cấp `GET /api/staff` và `GET /api/staff/{id}`.
+
+3. **`FeedbackCategory` (`/api/categories`)**
+   - `FeedbackCategoryResponseDto`: record chứa `id`, `code`, `name`, `group` (`String`), `defaultPriority` (`String`), `keywords` (`List<String>`), `active`.
+   - `FeedbackCategoryService`: cung cấp `getAllCategories()` (`findAll()`) và `getCategoryById(Long id)` (`findById(id)`), ánh xạ enum `IssueGroup`, `Priority` sang tên chuỗi và sao chép `keywords` bằng `List.copyOf(...)`.
+   - `FeedbackCategoryController`: cung cấp `GET /api/categories` và `GET /api/categories/{id}`.
+
+### Kết quả kiểm tra
+
+- **Lệnh chạy:** `.\mvnw.cmd test-compile -o`
+- **Kết quả:** Biên dịch thành công toàn bộ 41 file nguồn chính và 1 file test (`BUILD SUCCESS`).
