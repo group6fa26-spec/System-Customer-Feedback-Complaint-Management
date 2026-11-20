@@ -1,25 +1,49 @@
 package com.bql.feedback.model;
 
-import java.time.*;
+import jakarta.persistence.*;
+import java.time.Duration;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
 
 /** Phiếu phản hồi/khiếu nại - thực thể trung tâm (CF04, CF06, CF07, CF09...). */
+@Entity
+@Table(name = "feedbacks")
 public class Feedback {
 
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    @Column(unique = true)
     private String code; // CF06 - mã tra cứu duy nhất, vd FB-20261114-0001
+
     private Long customerId;
+
+    @Enumerated(EnumType.STRING)
     private FeedbackType type;
+
     private Long categoryId; // Danh mục chính thức (sau khi xác nhận)
     private Long autoCategoryId; // Danh mục do hệ thống gợi ý
+
+    @Enumerated(EnumType.STRING)
     private ClassifiedBy classifiedBy;
+
     private double autoConfidence; // Độ tin cậy gợi ý 0-1
     private String title;
+
+    @Column(length = 4000)
     private String content;
+
     private String serviceName; // CF04 - dịch vụ liên quan
     private String location; // Vị trí: block/tầng/khu vực
     private String apartmentCode;
+
+    @Enumerated(EnumType.STRING)
     private Priority priority;
+
+    @Enumerated(EnumType.STRING)
     private FeedbackStatus status;
+
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
     private LocalDateTime firstResponseAt;
@@ -41,15 +65,26 @@ public class Feedback {
     private boolean requiresManagerApproval; // Critical: Manager duyệt trước khi gửi kết quả
     private Long approvedByManagerId;
     private LocalDateTime approvedAt;
+
+    @Column(length = 4000)
     private String resolutionSummary; // Giải pháp - bắt buộc khi Resolved
+
     private LocalDateTime deletedAt; // Xóa mềm - không xóa vật lý khiếu nại đã tiếp nhận
 
+    protected Feedback() {
+    }
+
     public Feedback(String code, Long customerId, FeedbackType type, String title, String content,
-                     LocalDateTime createdAt) {
-        this.code = code; this.customerId = customerId; this.type = type;
-        this.title = title; this.content = content;
-        this.createdAt = createdAt; this.updatedAt = createdAt;
-        this.status = FeedbackStatus.NEW; this.priority = Priority.NORMAL;
+                    LocalDateTime createdAt) {
+        this.code = code;
+        this.customerId = customerId;
+        this.type = type;
+        this.title = title;
+        this.content = content;
+        this.createdAt = createdAt;
+        this.updatedAt = createdAt;
+        this.status = FeedbackStatus.NEW;
+        this.priority = Priority.NORMAL;
         this.afterHours = isOutsideOfficeHours(createdAt);
     }
 
@@ -163,7 +198,8 @@ public class Feedback {
     public void markFirstResponse(LocalDateTime at) { if (firstResponseAt == null) firstResponseAt = at; }
 
     public void approveByManager(Long managerId, LocalDateTime at) {
-        this.approvedByManagerId = managerId; this.approvedAt = at;
+        this.approvedByManagerId = managerId;
+        this.approvedAt = at;
     }
 
     /** Chuyển trạng thái, kiểm tra Business Rules 3, 4, 6. */
@@ -180,7 +216,8 @@ public class Feedback {
         }
         if (to == FeedbackStatus.REOPENED) {
             if (reopenCount >= MAX_REOPEN) throw new IllegalStateException("Reopen quá " + MAX_REOPEN + " lần, cần Manager xử lý");
-            reopenCount++; resolvedAt = null;
+            reopenCount++;
+            resolvedAt = null;
         }
         if (to == FeedbackStatus.CLOSED) closedAt = at;
         this.status = to;
