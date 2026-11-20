@@ -1,11 +1,17 @@
 package com.bql.feedback.model;
 
-import java.time.*;
+import jakarta.persistence.*;
+import java.time.LocalDateTime;
 
 /** CF01/CF02 - Hồ sơ cư dân (khách hàng). */
+@Entity
+@Table(name = "customers")
 public class Customer {
 
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
     private String fullName;
     private String phone;
     private String email;
@@ -17,11 +23,20 @@ public class Customer {
     private int ratingTrustScore; // 0-100, thấp thì đánh giá sao ít trọng số
     private LocalDateTime createdAt;
 
+    protected Customer() {
+    }
+
     public Customer(Long id, String fullName, String phone, String email, String apartmentCode,
                     boolean verifiedResident, LocalDateTime createdAt) {
-        this.id = id; this.fullName = fullName; this.phone = phone; this.email = email;
-        this.apartmentCode = apartmentCode; this.verifiedResident = verifiedResident;
-        this.createdAt = createdAt; this.active = true; this.ratingTrustScore = 100;
+        this.id = id;
+        this.fullName = fullName;
+        this.phone = phone;
+        this.email = email;
+        this.apartmentCode = apartmentCode;
+        this.verifiedResident = verifiedResident;
+        this.createdAt = createdAt;
+        this.active = true;
+        this.ratingTrustScore = 100;
     }
 
     public Long getId() { return id; }
