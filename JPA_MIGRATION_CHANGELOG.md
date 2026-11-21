@@ -332,3 +332,57 @@
 
 - **Lệnh chạy:** `.\mvnw.cmd test-compile -o`
 - **Kết quả:** Biên dịch thành công toàn bộ 51 file nguồn chính và 1 file test (`BUILD SUCCESS`).
+
+---
+
+## 9. Nhật ký bổ sung chức năng đăng nhập cơ bản với bảng riêng `user_accounts`
+
+- **Ngày:** 2026-11-21
+- **Mục tiêu:** Triển khai API đăng nhập cơ bản (`POST /api/auth/login`) theo **Phương án 2** (tách bảng tài khoản `user_accounts` riêng, không sửa đổi entity `Customer` và `Staff`, tạm thời chưa áp dụng Spring Security/JWT).
+- **Phạm vi:** Thêm mới **6 file** Java (`model`, `repository`, `dto`, `service`, `controller`).
+
+### Chi tiết 6 file thêm mới
+
+1. **`src/main/java/com/bql/feedback/model/UserAccount.java`**
+   - Entity ánh xạ bảng `user_accounts` gồm: `id`, `username` (`unique`, `nullable = false`), `password` (`nullable = false`), `role` (`@Enumerated(EnumType.STRING)`), `customerId`, `staffId`, `active`, `createdAt`, `lastLoginAt`.
+2. **`src/main/java/com/bql/feedback/repository/UserAccountRepository.java`**
+   - Kế thừa `JpaRepository<UserAccount, Long>`, bổ sung `findByUsername`, `existsByUsername`, `findByCustomerId`, `findByStaffId`.
+3. **`src/main/java/com/bql/feedback/dto/LoginRequestDto.java`**
+   - Record nhận `username` và `password`.
+4. **`src/main/java/com/bql/feedback/dto/LoginResponseDto.java`**
+   - Record trả thông tin phiên đăng nhập gồm `accountId`, `username`, `role`, `customerId`, `staffId`, `fullName`, `department`, `apartmentCode`, `blocked`, `lastLoginAt` (không trả `password`).
+5. **`src/main/java/com/bql/feedback/service/AuthService.java`**
+   - Xác thực `username`/`password`, kiểm tra `active` của `UserAccount` và hồ sơ `Customer`/`Staff` tương ứng, cập nhật `lastLoginAt` khi đăng nhập thành công; ném `BusinessException`/`NotFoundException` về `GlobalExceptionHandler`.
+6. **`src/main/java/com/bql/feedback/controller/AuthController.java`**
+   - Cung cấp endpoint `POST /api/auth/login`.
+
+### Kết quả kiểm tra
+
+- **Lệnh chạy:** `.\mvnw.cmd test-compile -o`
+- **Kết quả:** Biên dịch thành công toàn bộ 57 file nguồn chính và 1 file test (`BUILD SUCCESS`).
+
+---
+
+## 10. Nhật ký bổ sung API đăng ký cơ bản cho cư dân (`POST /api/auth/register`)
+
+- **Ngày:** 2026-11-21
+- **Mục tiêu:** Bổ sung chức năng đăng ký tài khoản cơ bản chỉ dành riêng cho cư dân (`Role.CUSTOMER`), tự động tạo đồng thời hồ sơ `Customer` và tài khoản `UserAccount` trong cùng transaction.
+- **Phạm vi:** Thêm mới **1 file** (`RegisterRequestDto.java`), chỉnh sửa **2 file** (`AuthService.java`, `AuthController.java`).
+
+### Chi tiết thay đổi
+
+1. **`src/main/java/com/bql/feedback/dto/RegisterRequestDto.java`** *(thêm mới)*
+   - Record nhận dữ liệu đăng ký cư dân: `username`, `password`, `fullName`, `phone`, `email`, `apartmentCode`.
+2. **`src/main/java/com/bql/feedback/service/AuthService.java`** *(chỉnh sửa)*
+   - **Thêm:** Method `registerCustomer(RegisterRequestDto request)` (`@Transactional`):
+     - Kiểm tra đầy đủ trường bắt buộc; kiểm tra trùng `username` (`existsByUsername`), trùng `email` (`existsByEmail`), và trùng `phone` (`findByPhone`) → ném `BusinessException` nếu vi phạm.
+     - Tạo mới `Customer` với `verifiedResident = false`, `active = true`, `ratingTrustScore = 100`.
+     - Tạo mới `UserAccount` gắn cứng `role = Role.CUSTOMER`, liên kết `customerId`, `staffId = null`, `active = true`.
+     - Trả về `LoginResponseDto` (không trả `password`).
+3. **`src/main/java/com/bql/feedback/controller/AuthController.java`** *(chỉnh sửa)*
+   - **Thêm:** Endpoint `POST /api/auth/register` trả HTTP `201 Created`.
+
+### Kết quả kiểm tra
+
+- **Lệnh chạy:** `.\mvnw.cmd test-compile -o`
+- **Kết quả:** Biên dịch thành công toàn bộ 58 file nguồn chính và 1 file test (`BUILD SUCCESS`).
