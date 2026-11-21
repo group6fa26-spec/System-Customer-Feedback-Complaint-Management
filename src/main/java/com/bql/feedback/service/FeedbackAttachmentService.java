@@ -1,18 +1,18 @@
 package com.bql.feedback.service;
 
 import com.bql.feedback.dto.FeedbackAttachmentResponseDto;
+import com.bql.feedback.exception.BusinessException;
+import com.bql.feedback.exception.NotFoundException;
 import com.bql.feedback.model.FeedbackAttachment;
 import com.bql.feedback.repository.FeedbackAttachmentRepository;
 import com.bql.feedback.repository.FeedbackRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
-import org.springframework.web.server.ResponseStatusException;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -67,25 +67,22 @@ public class FeedbackAttachmentService {
         ensureFeedbackExists(feedbackId);
 
         if (file == null || file.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Tệp đính kèm không được để trống");
+            throw new BusinessException("Tệp đính kèm không được để trống");
         }
         if (file.getSize() > maxFileSizeBytes) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
+            throw new BusinessException(
                     "Dung lượng tệp vượt quá giới hạn tối đa " + (maxFileSizeBytes / (1024 * 1024)) + "MB");
         }
 
         String contentType = file.getContentType();
         if (contentType == null || !ALLOWED_CONTENT_TYPES.contains(contentType.toLowerCase(Locale.ROOT))) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
+            throw new BusinessException(
                     "Định dạng tệp không được hỗ trợ. Chỉ chấp nhận: JPG, PNG, WEBP, GIF, PDF");
         }
 
         long currentCount = attachmentRepository.countByFeedbackId(feedbackId);
         if (currentCount >= maxFilesPerFeedback) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
+            throw new BusinessException(
                     "Mỗi phiếu chỉ được đính kèm tối đa " + maxFilesPerFeedback + " tệp");
         }
 
@@ -97,7 +94,7 @@ public class FeedbackAttachmentService {
         Path feedbackDir = uploadRoot.resolve("feedbacks").resolve(String.valueOf(feedbackId)).normalize();
         Path targetPath = feedbackDir.resolve(storedFileName).normalize();
         if (!targetPath.startsWith(uploadRoot)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Tên tệp không hợp lệ");
+            throw new BusinessException("Tên tệp không hợp lệ");
         }
 
         try {
@@ -106,7 +103,7 @@ public class FeedbackAttachmentService {
                 Files.copy(in, targetPath, StandardCopyOption.REPLACE_EXISTING);
             }
         } catch (IOException ex) {
-            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Không thể lưu tệp đính kèm", ex);
+            throw new RuntimeException("Không thể lưu tệp đính kèm", ex);
         }
 
         try {
@@ -146,29 +143,28 @@ public class FeedbackAttachmentService {
 
         FeedbackAttachment attachment = attachmentRepository.findById(attachmentId)
                 .filter(a -> feedbackId.equals(a.getFeedbackId()))
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.NOT_FOUND, "Không tìm thấy tệp đính kèm #" + attachmentId + " của phiếu #" + feedbackId));
+                .orElseThrow(() -> new NotFoundException(
+                        "Không tìm thấy tệp đính kèm #" + attachmentId + " của phiếu #" + feedbackId));
 
         Path filePath = uploadRoot.resolve(attachment.getFileUrl()).normalize();
         if (!filePath.startsWith(uploadRoot) || !Files.exists(filePath)) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Tệp vật lý không tồn tại trên hệ thống");
+            throw new NotFoundException("Tệp vật lý không tồn tại trên hệ thống");
         }
 
         try {
             Resource resource = new UrlResource(filePath.toUri());
             if (!resource.exists() || !resource.isReadable()) {
-                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Không thể đọc tệp đính kèm");
+                throw new NotFoundException("Không thể đọc tệp đính kèm");
             }
             return new AttachmentDownload(resource, attachment.getFileName(), attachment.getContentType());
         } catch (MalformedURLException ex) {
-            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Đường dẫn tệp không hợp lệ", ex);
+            throw new RuntimeException("Đường dẫn tệp không hợp lệ", ex);
         }
     }
 
     private void ensureFeedbackExists(Long feedbackId) {
         feedbackRepository.findByIdAndDeletedAtIsNull(feedbackId)
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.NOT_FOUND, "Không tìm thấy phiếu với ID: " + feedbackId));
+                .orElseThrow(() -> new NotFoundException("Không tìm thấy phiếu với ID: " + feedbackId));
     }
 
     private String sanitizeFileName(String rawName) {

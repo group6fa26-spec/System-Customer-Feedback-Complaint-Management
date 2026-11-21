@@ -1,6 +1,7 @@
 package com.bql.feedback.service;
 
 import com.bql.feedback.dto.CustomerResponseDto;
+import com.bql.feedback.exception.NotFoundException;
 import com.bql.feedback.model.Customer;
 import com.bql.feedback.repository.CustomerRepository;
 import org.springframework.stereotype.Service;
@@ -27,7 +28,7 @@ public class CustomerService {
     // 2. Lấy chi tiết 1 cư dân theo ID
     public CustomerResponseDto getCustomerById(Long id) {
         Customer customer = customerRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Không tìm thấy cư dân với ID: " + id));
+                .orElseThrow(() -> new NotFoundException("Không tìm thấy cư dân với ID: " + id));
         return toDto(customer);
     }
 

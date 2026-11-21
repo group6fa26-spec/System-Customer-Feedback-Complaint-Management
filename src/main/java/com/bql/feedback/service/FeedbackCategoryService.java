@@ -1,6 +1,7 @@
 package com.bql.feedback.service;
 
 import com.bql.feedback.dto.FeedbackCategoryResponseDto;
+import com.bql.feedback.exception.NotFoundException;
 import com.bql.feedback.model.FeedbackCategory;
 import com.bql.feedback.repository.FeedbackCategoryRepository;
 import org.springframework.stereotype.Service;
@@ -27,7 +28,7 @@ public class FeedbackCategoryService {
     // 2. Lấy chi tiết 1 danh mục theo ID
     public FeedbackCategoryResponseDto getCategoryById(Long id) {
         FeedbackCategory category = feedbackCategoryRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Không tìm thấy danh mục với ID: " + id));
+                .orElseThrow(() -> new NotFoundException("Không tìm thấy danh mục với ID: " + id));
         return toDto(category);
     }
 

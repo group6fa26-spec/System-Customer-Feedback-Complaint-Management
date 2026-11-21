@@ -1,5 +1,6 @@
 package com.bql.feedback.model;
 
+import com.bql.feedback.exception.BusinessException;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
@@ -31,7 +32,7 @@ public class SatisfactionRating {
     public SatisfactionRating(Long id, Long feedbackId, Long customerId, int stars, String comment,
                               LocalDateTime createdAt, boolean flaggedSuspicious, double trustWeight) {
         if (stars < 1 || stars > 5) {
-            throw new IllegalArgumentException("stars phải từ 1 đến 5");
+            throw new BusinessException("stars phải từ 1 đến 5");
         }
         this.id = id;
         this.feedbackId = feedbackId;
@@ -52,7 +53,7 @@ public class SatisfactionRating {
     public int getStars() { return stars; }
     public void setStars(int stars) {
         if (stars < 1 || stars > 5) {
-            throw new IllegalArgumentException("stars phải từ 1 đến 5");
+            throw new BusinessException("stars phải từ 1 đến 5");
         }
         this.stars = stars;
     }
