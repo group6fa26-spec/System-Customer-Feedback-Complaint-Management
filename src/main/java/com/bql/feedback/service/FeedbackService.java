@@ -3,6 +3,8 @@ package com.bql.feedback.service;
 import com.bql.feedback.dto.CreateFeedbackRequestDto;
 import com.bql.feedback.dto.FeedbackResponseDto;
 import com.bql.feedback.dto.MergeFeedbackRequestDto;
+import com.bql.feedback.exception.BusinessException;
+import com.bql.feedback.exception.NotFoundException;
 import com.bql.feedback.model.ClassifiedBy;
 import com.bql.feedback.model.Customer;
 import com.bql.feedback.model.Feedback;
@@ -18,10 +20,8 @@ import com.bql.feedback.repository.StatusHistoryRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -80,26 +80,24 @@ public class FeedbackService {
     // 2. Lấy chi tiết 1 phiếu theo ID (chưa xóa mềm)
     public FeedbackResponseDto getFeedbackById(Long id) {
         Feedback feedback = feedbackRepository.findByIdAndDeletedAtIsNull(id)
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.NOT_FOUND, "Không tìm thấy phiếu với ID: " + id));
+                .orElseThrow(() -> new NotFoundException("Không tìm thấy phiếu với ID: " + id));
         return toDto(feedback, List.of());
     }
 
     // 3. Tra cứu phiếu theo mã (FB-yyyyMMdd-0001)
     public FeedbackResponseDto getFeedbackByCode(String code) {
         if (code == null || code.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Mã phiếu không được để trống");
+            throw new BusinessException("Mã phiếu không được để trống");
         }
         Feedback feedback = feedbackRepository.findByCodeAndDeletedAtIsNull(code.trim())
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.NOT_FOUND, "Không tìm thấy phiếu với mã: " + code));
+                .orElseThrow(() -> new NotFoundException("Không tìm thấy phiếu với mã: " + code));
         return toDto(feedback, List.of());
     }
 
     // 4. Cư dân xem danh sách phiếu của chính mình (CF13)
     public Page<FeedbackResponseDto> getMyFeedbacks(Long customerId, Pageable pageable) {
         if (customerId == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Thiếu header X-Customer-Id");
+            throw new BusinessException("Thiếu header X-Customer-Id");
         }
         return feedbackRepository.findByCustomerIdAndDeletedAtIsNull(customerId, pageable)
                 .map(f -> toDto(f, List.of()));
@@ -108,11 +106,11 @@ public class FeedbackService {
     // 5. Cư dân xem chi tiết 1 phiếu của chính mình (CF13)
     public FeedbackResponseDto getMyFeedbackById(Long id, Long customerId) {
         if (customerId == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Thiếu header X-Customer-Id");
+            throw new BusinessException("Thiếu header X-Customer-Id");
         }
         Feedback feedback = feedbackRepository.findByIdAndCustomerIdAndDeletedAtIsNull(id, customerId)
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.NOT_FOUND, "Không tìm thấy phiếu #" + id + " của cư dân #" + customerId));
+                .orElseThrow(() -> new NotFoundException(
+                        "Không tìm thấy phiếu #" + id + " của cư dân #" + customerId));
         return toDto(feedback, List.of());
     }
 
@@ -122,12 +120,11 @@ public class FeedbackService {
         validateCreateRequest(request);
 
         Customer customer = customerRepository.findById(request.customerId())
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.NOT_FOUND, "Không tìm thấy cư dân với ID: " + request.customerId()));
+                .orElseThrow(() -> new NotFoundException(
+                        "Không tìm thấy cư dân với ID: " + request.customerId()));
 
         if (!customer.canSubmit()) {
-            throw new ResponseStatusException(
-                    HttpStatus.FORBIDDEN,
+            throw new BusinessException(
                     "Tài khoản cư dân đang bị khóa hoặc không hoạt động, không thể gửi phản hồi");
         }
 
@@ -167,8 +164,8 @@ public class FeedbackService {
         FeedbackCategory chosenCategory = null;
         if (request.categoryId() != null) {
             chosenCategory = feedbackCategoryRepository.findById(request.categoryId())
-                    .orElseThrow(() -> new ResponseStatusException(
-                            HttpStatus.BAD_REQUEST, "Danh mục không tồn tại: " + request.categoryId()));
+                    .orElseThrow(() -> new NotFoundException(
+                            "Không tìm thấy danh mục với ID: " + request.categoryId()));
             feedback.setCategoryId(chosenCategory.getId());
             feedback.setClassifiedBy(ClassifiedBy.MANUAL);
         } else if (autoResult != null) {
@@ -209,31 +206,27 @@ public class FeedbackService {
     @Transactional
     public FeedbackResponseDto mergeDuplicateFeedback(Long duplicateId, MergeFeedbackRequestDto request) {
         if (request == null || request.originalFeedbackId() == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "originalFeedbackId là bắt buộc");
+            throw new BusinessException("originalFeedbackId là bắt buộc");
         }
         if (duplicateId.equals(request.originalFeedbackId())) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Không thể gộp phiếu vào chính nó");
+            throw new BusinessException("Không thể gộp phiếu vào chính nó");
         }
 
         Feedback duplicate = feedbackRepository.findByIdAndDeletedAtIsNull(duplicateId)
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.NOT_FOUND, "Không tìm thấy phiếu cần gộp với ID: " + duplicateId));
+                .orElseThrow(() -> new NotFoundException(
+                        "Không tìm thấy phiếu cần gộp với ID: " + duplicateId));
         Feedback original = feedbackRepository.findByIdAndDeletedAtIsNull(request.originalFeedbackId())
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.NOT_FOUND, "Không tìm thấy phiếu gốc với ID: " + request.originalFeedbackId()));
+                .orElseThrow(() -> new NotFoundException(
+                        "Không tìm thấy phiếu gốc với ID: " + request.originalFeedbackId()));
 
         if (original.getStatus().isFinal()) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST, "Phiếu gốc đã ở trạng thái kết thúc (" + original.getStatus() + "), không thể gộp");
+            throw new BusinessException(
+                    "Phiếu gốc đã ở trạng thái kết thúc (" + original.getStatus() + "), không thể gộp");
         }
 
         FeedbackStatus previousStatus = duplicate.getStatus();
         LocalDateTime now = LocalDateTime.now();
-        try {
-            duplicate.markDuplicateOf(original, now);
-        } catch (IllegalStateException ex) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage());
-        }
+        duplicate.markDuplicateOf(original, now);
 
         feedbackRepository.save(original);
         Feedback savedDuplicate = feedbackRepository.save(duplicate);
@@ -258,19 +251,19 @@ public class FeedbackService {
 
     private void validateCreateRequest(CreateFeedbackRequestDto request) {
         if (request == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Dữ liệu yêu cầu không được rỗng");
+            throw new BusinessException("Dữ liệu yêu cầu không được rỗng");
         }
         if (request.customerId() == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "customerId là bắt buộc");
+            throw new BusinessException("customerId là bắt buộc");
         }
         if (request.type() == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "type là bắt buộc");
+            throw new BusinessException("type là bắt buộc");
         }
         if (request.title() == null || request.title().isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "title không được để trống");
+            throw new BusinessException("title không được để trống");
         }
         if (request.content() == null || request.content().isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "content không được để trống");
+            throw new BusinessException("content không được để trống");
         }
     }
 

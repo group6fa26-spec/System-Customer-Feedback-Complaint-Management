@@ -290,3 +290,99 @@
 
 - **Lệnh chạy:** `.\mvnw.cmd test-compile -o`
 - **Kết quả:** Biên dịch thành công toàn bộ 46 file nguồn chính và 1 file test (`BUILD SUCCESS`).
+
+---
+
+## 8. Nhật ký chuẩn hóa xử lý ngoại lệ tập trung (`exception/`) & cấu hình CORS (`config/`)
+
+- **Ngày:** 2026-11-21
+- **Mục tiêu:** Xây dựng tầng xử lý lỗi tập trung với `@RestControllerAdvice` trả JSON `ErrorResponse` thống nhất, cấu hình CORS cho Frontend trên `/api/**`, và chuyển toàn bộ ngoại lệ nghiệp vụ / không tìm thấy trong Model & Service sang `BusinessException` và `NotFoundException`.
+- **Phạm vi:** Thêm mới **5 file** Java (`exception/` và `config/`), chỉnh sửa **7 file** Java (2 model + 5 service) và `application.properties`.
+
+### Chi tiết các file thêm mới
+
+1. **`src/main/java/com/bql/feedback/exception/NotFoundException.java`**
+   - Ngoại lệ `RuntimeException` dùng khi không tìm thấy dữ liệu (trả HTTP `404 Not Found`).
+2. **`src/main/java/com/bql/feedback/exception/BusinessException.java`**
+   - Ngoại lệ `RuntimeException` dùng khi vi phạm quy tắc nghiệp vụ hoặc dữ liệu không hợp lệ (trả HTTP `400 Bad Request`).
+3. **`src/main/java/com/bql/feedback/exception/ErrorResponse.java`**
+   - Record chuẩn hóa JSON lỗi trả về gồm 4 trường: `timestamp`, `status`, `error`, `message` (kèm factory `ErrorResponse.of(HttpStatus, String)`).
+4. **`src/main/java/com/bql/feedback/exception/GlobalExceptionHandler.java`**
+   - `@RestControllerAdvice` bắt và chuẩn hóa các ngoại lệ: `NotFoundException` (`404`), `BusinessException` (`400`), `MethodArgumentNotValidException` (`400`), `MissingRequestHeaderException` (`400`), `MaxUploadSizeExceededException` (`400`), `HttpMessageNotReadableException` (`400`), `MethodArgumentTypeMismatchException` (`400`), và `Exception` chung (`500`).
+5. **`src/main/java/com/bql/feedback/config/CorsConfig.java`**
+   - `@Configuration` triển khai `WebMvcConfigurer`, bật CORS cho `/api/**` với các origin đọc từ `app.cors.allowed-origins` (`localhost:5500`, `127.0.0.1:5500`, `localhost:3000`, `localhost:5173`), đầy đủ method (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS`), `allowedHeaders("*")`, `exposedHeaders("Content-Disposition")` và `allowCredentials(true)`. *(Dự án hiện chưa có Spring Security; khi bổ sung sau này cần bật thêm `.cors()` trong `SecurityFilterChain`.)*
+
+### Chi tiết các file chỉnh sửa
+
+1. **`src/main/java/com/bql/feedback/model/Feedback.java`**
+   - **Sửa:** Đổi 4 chỗ `throw new IllegalStateException(...)` trong `changeStatus(...)` sang `throw new BusinessException(...)`.
+2. **`src/main/java/com/bql/feedback/model/SatisfactionRating.java`**
+   - **Sửa:** Đổi 2 chỗ `throw new IllegalArgumentException("stars phải từ 1 đến 5")` trong constructor và `setStars(...)` sang `throw new BusinessException(...)`.
+3. **`src/main/java/com/bql/feedback/service/CustomerService.java`**, **`StaffService.java`**, **`FeedbackCategoryService.java`**
+   - **Sửa:** Đổi `RuntimeException` khi không tìm thấy theo `id` sang `NotFoundException`.
+4. **`src/main/java/com/bql/feedback/service/FeedbackService.java`**
+   - **Sửa:** Đổi toàn bộ `ResponseStatusException` sang `NotFoundException` (404) và `BusinessException` (400).
+   - **Xóa:** Khối `try-catch (IllegalStateException)` trong `mergeDuplicateFeedback(...)` để `BusinessException` từ `Feedback.changeStatus(...)` tự động chuyển về `GlobalExceptionHandler`.
+5. **`src/main/java/com/bql/feedback/service/FeedbackAttachmentService.java`**
+   - **Sửa:** Đổi `ResponseStatusException` sang `NotFoundException` (404), `BusinessException` (400), và `RuntimeException` (500 qua `GlobalExceptionHandler`).
+6. **`src/main/resources/application.properties`**
+   - **Thêm:** `app.cors.allowed-origins=http://localhost:5500,http://127.0.0.1:5500,http://localhost:3000,http://localhost:5173`.
+
+### Kết quả kiểm tra
+
+- **Lệnh chạy:** `.\mvnw.cmd test-compile -o`
+- **Kết quả:** Biên dịch thành công toàn bộ 51 file nguồn chính và 1 file test (`BUILD SUCCESS`).
+
+---
+
+## 9. Nhật ký bổ sung chức năng đăng nhập cơ bản với bảng riêng `user_accounts`
+
+- **Ngày:** 2026-11-21
+- **Mục tiêu:** Triển khai API đăng nhập cơ bản (`POST /api/auth/login`) theo **Phương án 2** (tách bảng tài khoản `user_accounts` riêng, không sửa đổi entity `Customer` và `Staff`, tạm thời chưa áp dụng Spring Security/JWT).
+- **Phạm vi:** Thêm mới **6 file** Java (`model`, `repository`, `dto`, `service`, `controller`).
+
+### Chi tiết 6 file thêm mới
+
+1. **`src/main/java/com/bql/feedback/model/UserAccount.java`**
+   - Entity ánh xạ bảng `user_accounts` gồm: `id`, `username` (`unique`, `nullable = false`), `password` (`nullable = false`), `role` (`@Enumerated(EnumType.STRING)`), `customerId`, `staffId`, `active`, `createdAt`, `lastLoginAt`.
+2. **`src/main/java/com/bql/feedback/repository/UserAccountRepository.java`**
+   - Kế thừa `JpaRepository<UserAccount, Long>`, bổ sung `findByUsername`, `existsByUsername`, `findByCustomerId`, `findByStaffId`.
+3. **`src/main/java/com/bql/feedback/dto/LoginRequestDto.java`**
+   - Record nhận `username` và `password`.
+4. **`src/main/java/com/bql/feedback/dto/LoginResponseDto.java`**
+   - Record trả thông tin phiên đăng nhập gồm `accountId`, `username`, `role`, `customerId`, `staffId`, `fullName`, `department`, `apartmentCode`, `blocked`, `lastLoginAt` (không trả `password`).
+5. **`src/main/java/com/bql/feedback/service/AuthService.java`**
+   - Xác thực `username`/`password`, kiểm tra `active` của `UserAccount` và hồ sơ `Customer`/`Staff` tương ứng, cập nhật `lastLoginAt` khi đăng nhập thành công; ném `BusinessException`/`NotFoundException` về `GlobalExceptionHandler`.
+6. **`src/main/java/com/bql/feedback/controller/AuthController.java`**
+   - Cung cấp endpoint `POST /api/auth/login`.
+
+### Kết quả kiểm tra
+
+- **Lệnh chạy:** `.\mvnw.cmd test-compile -o`
+- **Kết quả:** Biên dịch thành công toàn bộ 57 file nguồn chính và 1 file test (`BUILD SUCCESS`).
+
+---
+
+## 10. Nhật ký bổ sung API đăng ký cơ bản cho cư dân (`POST /api/auth/register`)
+
+- **Ngày:** 2026-11-21
+- **Mục tiêu:** Bổ sung chức năng đăng ký tài khoản cơ bản chỉ dành riêng cho cư dân (`Role.CUSTOMER`), tự động tạo đồng thời hồ sơ `Customer` và tài khoản `UserAccount` trong cùng transaction.
+- **Phạm vi:** Thêm mới **1 file** (`RegisterRequestDto.java`), chỉnh sửa **2 file** (`AuthService.java`, `AuthController.java`).
+
+### Chi tiết thay đổi
+
+1. **`src/main/java/com/bql/feedback/dto/RegisterRequestDto.java`** *(thêm mới)*
+   - Record nhận dữ liệu đăng ký cư dân: `username`, `password`, `fullName`, `phone`, `email`, `apartmentCode`.
+2. **`src/main/java/com/bql/feedback/service/AuthService.java`** *(chỉnh sửa)*
+   - **Thêm:** Method `registerCustomer(RegisterRequestDto request)` (`@Transactional`):
+     - Kiểm tra đầy đủ trường bắt buộc; kiểm tra trùng `username` (`existsByUsername`), trùng `email` (`existsByEmail`), và trùng `phone` (`findByPhone`) → ném `BusinessException` nếu vi phạm.
+     - Tạo mới `Customer` với `verifiedResident = false`, `active = true`, `ratingTrustScore = 100`.
+     - Tạo mới `UserAccount` gắn cứng `role = Role.CUSTOMER`, liên kết `customerId`, `staffId = null`, `active = true`.
+     - Trả về `LoginResponseDto` (không trả `password`).
+3. **`src/main/java/com/bql/feedback/controller/AuthController.java`** *(chỉnh sửa)*
+   - **Thêm:** Endpoint `POST /api/auth/register` trả HTTP `201 Created`.
+
+### Kết quả kiểm tra
+
+- **Lệnh chạy:** `.\mvnw.cmd test-compile -o`
+- **Kết quả:** Biên dịch thành công toàn bộ 58 file nguồn chính và 1 file test (`BUILD SUCCESS`).

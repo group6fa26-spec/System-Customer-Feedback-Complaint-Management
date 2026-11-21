@@ -1,6 +1,7 @@
 package com.bql.feedback.service;
 
 import com.bql.feedback.dto.StaffResponseDto;
+import com.bql.feedback.exception.NotFoundException;
 import com.bql.feedback.model.Staff;
 import com.bql.feedback.repository.StaffRepository;
 import org.springframework.stereotype.Service;
@@ -27,7 +28,7 @@ public class StaffService {
     // 2. Lấy chi tiết 1 nhân viên theo ID
     public StaffResponseDto getStaffById(Long id) {
         Staff staff = staffRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Không tìm thấy nhân viên với ID: " + id));
+                .orElseThrow(() -> new NotFoundException("Không tìm thấy nhân viên với ID: " + id));
         return toDto(staff);
     }
 

@@ -1,5 +1,6 @@
 package com.bql.feedback.model;
 
+import com.bql.feedback.exception.BusinessException;
 import jakarta.persistence.*;
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -206,16 +207,16 @@ public class Feedback {
     public void changeStatus(FeedbackStatus to, LocalDateTime at) {
         boolean simpleClose = type.isSimpleFlow() && to == FeedbackStatus.CLOSED && !status.isFinal();
         if (!status.canMoveTo(to) && !simpleClose)
-            throw new IllegalStateException("Không thể chuyển " + status + " -> " + to);
+            throw new BusinessException("Không thể chuyển " + status + " -> " + to);
         if (to == FeedbackStatus.RESOLVED) {
             if (resolutionSummary == null || resolutionSummary.isBlank())
-                throw new IllegalStateException("Resolved phải có giải pháp");
+                throw new BusinessException("Resolved phải có giải pháp");
             if (requiresManagerApproval && approvedAt == null)
-                throw new IllegalStateException("Khiếu nại Critical cần Manager duyệt trước");
+                throw new BusinessException("Khiếu nại Critical cần Manager duyệt trước");
             resolvedAt = at;
         }
         if (to == FeedbackStatus.REOPENED) {
-            if (reopenCount >= MAX_REOPEN) throw new IllegalStateException("Reopen quá " + MAX_REOPEN + " lần, cần Manager xử lý");
+            if (reopenCount >= MAX_REOPEN) throw new BusinessException("Reopen quá " + MAX_REOPEN + " lần, cần Manager xử lý");
             reopenCount++;
             resolvedAt = null;
         }
