@@ -38,6 +38,11 @@ public interface FeedbackRepository extends Repository<Feedback, Long> {
 
     /** Sinh mã phản hồi dạng FB-yyyyMMdd-0001: đếm số phiếu trong ngày (tính cả phiếu đã xóa mềm). */
     long countByCreatedAtBetween(LocalDateTime from, LocalDateTime to);
+    boolean existsByCode(String code);
+
+    /** Chống spam/bấm đúp (Idempotency): tìm phiếu gần đây của cùng cư dân. */
+    List<Feedback> findByCustomerIdAndDeletedAtIsNullAndCreatedAtGreaterThanEqualOrderByCreatedAtDesc(
+            Long customerId, LocalDateTime since);
 
     /** CF17 - lọc/tìm kiếm. Tham số nào null thì bỏ qua điều kiện đó. */
     @Query("""

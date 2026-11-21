@@ -235,3 +235,58 @@
 
 - **Lệnh chạy:** `.\mvnw.cmd test-compile -o`
 - **Kết quả:** Biên dịch thành công toàn bộ 41 file nguồn chính và 1 file test (`BUILD SUCCESS`).
+
+---
+
+## 7. Nhật ký triển khai tạo phiếu phản hồi, tra cứu cư dân, gộp trùng 2 mức & upload tệp đính kèm
+
+- **Ngày:** 2026-11-21
+- **Mục tiêu:** Triển khai đầy đủ API tạo phiếu (`POST /api/feedbacks`), xem phiếu của cư dân (`GET /api/feedbacks/mine` dùng Header `X-Customer-Id`), tra cứu theo mã (`GET /api/feedbacks/code/{code}`), cơ chế chống trùng 2 mức (Idempotency + CS duyệt gộp), và upload/xem/tải tệp đính kèm (`FeedbackAttachment`).
+- **Phạm vi:** Thêm mới **5 file** Java, chỉnh sửa **4 file** Java và **2 file** cấu hình (`application.properties`, `.gitignore`).
+
+### Chi tiết các file thêm mới
+
+1. **`src/main/java/com/bql/feedback/dto/CreateFeedbackRequestDto.java`**
+   - Record nhận dữ liệu tạo mới phiếu phản hồi (`customerId`, `type`, `title`, `content`, `categoryId`, `serviceName`, `location`, `apartmentCode`, `aboutStaffId`).
+2. **`src/main/java/com/bql/feedback/dto/MergeFeedbackRequestDto.java`**
+   - Record nhận dữ liệu gộp phiếu trùng (`originalFeedbackId`, `staffId`, `note`) khi CS duyệt gộp.
+3. **`src/main/java/com/bql/feedback/dto/FeedbackAttachmentResponseDto.java`**
+   - Record trả về thông tin tệp đính kèm (`id`, `feedbackId`, `fileName`, `fileUrl`, `contentType`, `sizeBytes`, `uploadedById`, `uploadedAt`).
+4. **`src/main/java/com/bql/feedback/service/FeedbackAttachmentService.java`**
+   - Xử lý upload lưu file cục bộ vào thư mục `uploads/feedbacks/{feedbackId}/{uuid}.{ext}` (chống Path Traversal), kiểm tra tối đa **5 file/phiếu**, **10MB/file**, chỉ cho phép `JPG/PNG/WEBP/GIF/PDF`; cung cấp liệt kê và tải/xem tệp.
+5. **`src/main/java/com/bql/feedback/controller/FeedbackAttachmentController.java`**
+   - Cung cấp 3 endpoint dưới `/api/feedbacks/{feedbackId}/attachments`:
+     - `POST /api/feedbacks/{feedbackId}/attachments` (`multipart/form-data`, nhận `file`, `uploadedById` hoặc header `X-Customer-Id`)
+     - `GET /api/feedbacks/{feedbackId}/attachments`
+     - `GET /api/feedbacks/{feedbackId}/attachments/{attachmentId}/download`
+
+### Chi tiết các file chỉnh sửa
+
+1. **`src/main/java/com/bql/feedback/repository/FeedbackRepository.java`**
+   - **Thêm:** `existsByCode(String code)` để đảm bảo sinh mã ngày không bị trùng.
+   - **Thêm:** `findByCustomerIdAndDeletedAtIsNullAndCreatedAtGreaterThanEqualOrderByCreatedAtDesc(...)` phục vụ chống bấm đúp (Idempotency).
+2. **`src/main/java/com/bql/feedback/dto/FeedbackResponseDto.java`**
+   - **Mở rộng:** Bổ sung `serviceName`, `autoCategoryId`, `classifiedBy`, `autoConfidence`, `afterHours`, `missingInfo`, `requiresManagerApproval`, `duplicateOfId`, `duplicateCount`, `suspectedDuplicateIds`, `responseDueAt`, `resolveDueAt`.
+3. **`src/main/java/com/bql/feedback/service/FeedbackService.java`**
+   - **Thêm:** `createFeedback(...)`:
+     - Kiểm tra `customer.canSubmit()` (trả `403` nếu bị khóa/không hoạt động).
+     - **Mức 1 (Idempotency):** cùng `customerId`, `title`, `content` trong vòng 2 phút → trả về phiếu vừa tạo (`200 OK`) thay vì tạo trùng.
+     - Sinh mã `FB-yyyyMMdd-0001` theo ngày qua `countByCreatedAtBetween` + `existsByCode`.
+     - Phân loại tự động theo `keywords` của `FeedbackCategory` đang `active`, tính `autoConfidence` (`0.0–1.0`).
+     - Gọi `feedback.applyPriority(...)` để tính SLA `responseDueAt`, `resolveDueAt` và `requiresManagerApproval`.
+     - **Mức 2 (Nghi trùng nghiệp vụ):** vẫn tạo phiếu ở trạng thái `NEW` (trạng thái mở ban đầu trong `FeedbackStatus`), quét ứng viên qua `findDuplicateCandidates` + `isPossibleDuplicateOf` (24h) và trả kèm `suspectedDuplicateIds` cho CS duyệt.
+     - Ghi lịch sử `StatusHistory` ban đầu (`from = null`).
+   - **Thêm:** `mergeDuplicateFeedback(...)` để CS duyệt gộp qua `duplicate.markDuplicateOf(original, now)` → chuyển trạng thái `MERGED`, tăng `duplicateCount` ở phiếu gốc và ghi `StatusHistory`.
+   - **Thêm:** `getMyFeedbacks(customerId, pageable)`, `getMyFeedbackById(id, customerId)`, `getFeedbackByCode(code)`.
+   - **Sửa:** Chuyển lỗi không tìm thấy sang `ResponseStatusException` (`400`/`403`/`404`).
+4. **`src/main/java/com/bql/feedback/controller/FeedbackController.java`**
+   - **Thêm:** `POST /api/feedbacks`, `GET /api/feedbacks/mine` (Header `X-Customer-Id`, có phân trang), `GET /api/feedbacks/mine/{id}` (Header `X-Customer-Id`), `GET /api/feedbacks/code/{code}`, `POST /api/feedbacks/{id}/merge`.
+5. **`src/main/resources/application.properties`**
+   - **Thêm:** Cấu hình multipart (`10MB`), `app.upload.*` (`uploads`, `5` file/phiếu, `10485760` bytes), `app.feedback.idempotency-window-minutes=2`, `app.feedback.duplicate-window-hours=24`.
+6. **`.gitignore`**
+   - **Thêm:** `uploads/` để không commit tệp upload cục bộ lên Git.
+
+### Kết quả kiểm tra
+
+- **Lệnh chạy:** `.\mvnw.cmd test-compile -o`
+- **Kết quả:** Biên dịch thành công toàn bộ 46 file nguồn chính và 1 file test (`BUILD SUCCESS`).
