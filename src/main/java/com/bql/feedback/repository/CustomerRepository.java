@@ -9,6 +9,7 @@ import java.util.Optional;
 /** CRUD đầy đủ do JpaRepository cung cấp. Khuyến nghị "xóa" = đặt active=false thay vì xóa dòng. */
 public interface CustomerRepository extends JpaRepository<Customer, Long> {
     Optional<Customer> findByEmail(String email);
+    Optional<Customer> findByEmailIgnoreCase(String email);
     Optional<Customer> findByPhone(String phone);
     boolean existsByEmail(String email);
     List<Customer> findByApartmentCode(String apartmentCode);

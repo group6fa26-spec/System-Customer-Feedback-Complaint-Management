@@ -2,20 +2,28 @@ package com.bql.feedback.service;
 
 import com.bql.feedback.dto.LoginRequestDto;
 import com.bql.feedback.dto.LoginResponseDto;
+import com.bql.feedback.dto.RentalContractResponseDto;
 import com.bql.feedback.dto.RegisterRequestDto;
 import com.bql.feedback.exception.BusinessException;
 import com.bql.feedback.exception.NotFoundException;
+import com.bql.feedback.model.AccountStatus;
 import com.bql.feedback.model.Customer;
+import com.bql.feedback.model.RentalContract;
+import com.bql.feedback.model.RentalContractStatus;
+import com.bql.feedback.model.ResidentType;
 import com.bql.feedback.model.Role;
 import com.bql.feedback.model.Staff;
 import com.bql.feedback.model.UserAccount;
 import com.bql.feedback.repository.CustomerRepository;
+import com.bql.feedback.repository.RentalContractRepository;
 import com.bql.feedback.repository.StaffRepository;
 import com.bql.feedback.repository.UserAccountRepository;
+import com.bql.feedback.util.ContactValidationUtil;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Objects;
 
 @Service
@@ -23,15 +31,18 @@ public class AuthService {
 
     private final UserAccountRepository userAccountRepository;
     private final CustomerRepository customerRepository;
+    private final RentalContractRepository rentalContractRepository;
     private final StaffRepository staffRepository;
 
     public AuthService(
             UserAccountRepository userAccountRepository,
             CustomerRepository customerRepository,
+            RentalContractRepository rentalContractRepository,
             StaffRepository staffRepository
     ) {
         this.userAccountRepository = userAccountRepository;
         this.customerRepository = customerRepository;
+        this.rentalContractRepository = rentalContractRepository;
         this.staffRepository = staffRepository;
     }
 
@@ -54,7 +65,13 @@ public class AuthService {
             throw new BusinessException("Tên đăng nhập hoặc mật khẩu không đúng");
         }
 
-        if (!account.isActive()) {
+        if (account.getAccountStatus() == AccountStatus.PENDING) {
+            throw new BusinessException("Tài khoản đang chờ Ban quản lý duyệt");
+        }
+        if (account.getAccountStatus() == AccountStatus.REJECTED) {
+            throw new BusinessException("Tài khoản đăng ký đã bị từ chối");
+        }
+        if (!account.isActive() || account.getAccountStatus() == AccountStatus.DISABLED) {
             throw new BusinessException("Tài khoản đã bị vô hiệu hóa");
         }
 
@@ -62,6 +79,8 @@ public class AuthService {
         String department = null;
         String apartmentCode = null;
         Boolean blocked = null;
+        String residentType = null;
+        List<RentalContractResponseDto> rentalContracts = List.of();
 
         if (account.getRole() == Role.CUSTOMER && account.getCustomerId() != null) {
             Customer customer = customerRepository.findById(account.getCustomerId())
@@ -73,6 +92,8 @@ public class AuthService {
             fullName = customer.getFullName();
             apartmentCode = customer.getApartmentCode();
             blocked = customer.isBlocked();
+            residentType = customer.getResidentType().name();
+            rentalContracts = getRentalContractDtos(customer.getId());
         } else if (account.getRole() != Role.CUSTOMER && account.getStaffId() != null) {
             Staff staff = staffRepository.findById(account.getStaffId())
                     .orElseThrow(() -> new NotFoundException(
@@ -98,11 +119,14 @@ public class AuthService {
                 department,
                 apartmentCode,
                 blocked,
-                saved.getLastLoginAt()
+                saved.getLastLoginAt(),
+                residentType,
+                saved.getAccountStatus().name(),
+                rentalContracts
         );
     }
 
-    // Đăng ký tài khoản cơ bản - chỉ dành cho cư dân (Role.CUSTOMER)
+    // Đăng ký tài khoản chủ căn hộ hoặc người thuê.
     @Transactional
     public LoginResponseDto registerCustomer(RegisterRequestDto request) {
         if (request == null) {
@@ -113,9 +137,24 @@ public class AuthService {
             throw new BusinessException("Mật khẩu không được để trống");
         }
         String fullName = requireNonBlank(request.fullName(), "Họ tên không được để trống");
-        String phone = requireNonBlank(request.phone(), "Số điện thoại không được để trống");
-        String email = requireNonBlank(request.email(), "Email không được để trống");
+        String phone = ContactValidationUtil.normalizeAndValidatePhone(request.phone());
+        String email = ContactValidationUtil.normalizeAndValidateEmail(request.email());
         String apartmentCode = requireNonBlank(request.apartmentCode(), "Mã căn hộ không được để trống");
+        ResidentType residentType = request.residentType() != null ? request.residentType() : ResidentType.OWNER;
+        var rentalContractStartDate = request.rentalContractStartDate();
+        var rentalContractEndDate = request.rentalContractEndDate();
+
+        if (residentType == ResidentType.TENANT
+                && (rentalContractStartDate == null || rentalContractEndDate == null)) {
+            throw new BusinessException("Người thuê cần cung cấp ngày bắt đầu và kết thúc hợp đồng");
+        }
+        if (residentType == ResidentType.TENANT && rentalContractEndDate.isBefore(rentalContractStartDate)) {
+            throw new BusinessException("Ngày kết thúc hợp đồng phải sau hoặc bằng ngày bắt đầu");
+        }
+        if (residentType == ResidentType.OWNER
+                && (rentalContractStartDate != null || rentalContractEndDate != null)) {
+            throw new BusinessException("Chủ căn hộ không cần cung cấp thời hạn hợp đồng thuê");
+        }
 
         if (userAccountRepository.existsByUsername(username)) {
             throw new BusinessException("Tên đăng nhập đã tồn tại");
@@ -129,7 +168,20 @@ public class AuthService {
 
         LocalDateTime now = LocalDateTime.now();
         Customer customer = new Customer(null, fullName, phone, email, apartmentCode, false, now);
+        customer.setResidentType(residentType);
         Customer savedCustomer = customerRepository.save(customer);
+
+        if (residentType == ResidentType.TENANT) {
+            rentalContractRepository.save(new RentalContract(
+                    null,
+                    savedCustomer.getId(),
+                    apartmentCode,
+                    rentalContractStartDate,
+                    rentalContractEndDate,
+                    RentalContractStatus.PENDING,
+                    now
+            ));
+        }
 
         UserAccount account = new UserAccount(
                 null,
@@ -138,9 +190,10 @@ public class AuthService {
                 Role.CUSTOMER,
                 savedCustomer.getId(),
                 null,
-                true,
+                false,
                 now
         );
+        account.setAccountStatus(AccountStatus.PENDING);
         UserAccount savedAccount = userAccountRepository.save(account);
 
         return new LoginResponseDto(
@@ -153,8 +206,22 @@ public class AuthService {
                 null,
                 savedCustomer.getApartmentCode(),
                 savedCustomer.isBlocked(),
-                savedAccount.getLastLoginAt()
+                savedAccount.getLastLoginAt(),
+                savedCustomer.getResidentType().name(),
+                savedAccount.getAccountStatus().name(),
+                getRentalContractDtos(savedCustomer.getId())
         );
+    }
+
+    private List<RentalContractResponseDto> getRentalContractDtos(Long customerId) {
+        return rentalContractRepository.findByTenantCustomerIdOrderByStartDateDesc(customerId).stream()
+                .map(contract -> new RentalContractResponseDto(
+                        contract.getId(),
+                        contract.getApartmentCode(),
+                        contract.getStartDate(),
+                        contract.getEndDate(),
+                        contract.getStatus().name()))
+                .toList();
     }
 
     private String requireNonBlank(String value, String errorMessage) {

@@ -1,6 +1,7 @@
 package com.bql.feedback.dto;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 public record CustomerResponseDto(
         Long id,
@@ -8,6 +9,8 @@ public record CustomerResponseDto(
         String phone,
         String email,
         String apartmentCode,
+        String residentType,
+        List<RentalContractResponseDto> rentalContracts,
         boolean verifiedResident,
         boolean active,
         boolean blocked,
