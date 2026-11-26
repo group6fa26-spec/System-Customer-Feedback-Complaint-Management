@@ -16,6 +16,8 @@ public class Customer {
     private String phone;
     private String email;
     private String apartmentCode; // Mã căn hộ, vd A1-0501
+    @Enumerated(EnumType.STRING)
+    private ResidentType residentType = ResidentType.OWNER;
     private boolean verifiedResident; // BQL đã xác minh là cư dân thật (chống tài khoản ảo)
     private boolean active;
     private boolean blocked; // Bị khóa gửi phản ánh do spam/vi phạm
@@ -33,6 +35,7 @@ public class Customer {
         this.phone = phone;
         this.email = email;
         this.apartmentCode = apartmentCode;
+        this.residentType = ResidentType.OWNER;
         this.verifiedResident = verifiedResident;
         this.createdAt = createdAt;
         this.active = true;
@@ -49,6 +52,8 @@ public class Customer {
     public void setEmail(String email) { this.email = email; }
     public String getApartmentCode() { return apartmentCode; }
     public void setApartmentCode(String apartmentCode) { this.apartmentCode = apartmentCode; }
+    public ResidentType getResidentType() { return residentType != null ? residentType : ResidentType.OWNER; }
+    public void setResidentType(ResidentType residentType) { this.residentType = residentType; }
     public boolean isVerifiedResident() { return verifiedResident; }
     public void setVerifiedResident(boolean verifiedResident) { this.verifiedResident = verifiedResident; }
     public boolean isActive() { return active; }

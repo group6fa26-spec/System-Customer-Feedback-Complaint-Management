@@ -22,6 +22,10 @@ public class UserAccount {
     @Column(nullable = false)
     private Role role;
 
+    @Enumerated(EnumType.STRING)
+    @Column(length = 20)
+    private AccountStatus accountStatus;
+
     private Long customerId;
     private Long staffId;
     private boolean active;
@@ -51,6 +55,11 @@ public class UserAccount {
     public void setPassword(String password) { this.password = password; }
     public Role getRole() { return role; }
     public void setRole(Role role) { this.role = role; }
+    public AccountStatus getAccountStatus() {
+        if (accountStatus != null) return accountStatus;
+        return active ? AccountStatus.APPROVED : AccountStatus.DISABLED;
+    }
+    public void setAccountStatus(AccountStatus accountStatus) { this.accountStatus = accountStatus; }
     public Long getCustomerId() { return customerId; }
     public void setCustomerId(Long customerId) { this.customerId = customerId; }
     public Long getStaffId() { return staffId; }

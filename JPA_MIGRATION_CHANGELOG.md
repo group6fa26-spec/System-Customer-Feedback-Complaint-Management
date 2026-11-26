@@ -386,3 +386,199 @@
 
 - **Lệnh chạy:** `.\mvnw.cmd test-compile -o`
 - **Kết quả:** Biên dịch thành công toàn bộ 58 file nguồn chính và 1 file test (`BUILD SUCCESS`).
+
+---
+
+## 11. Nhật ký phân loại tài khoản chủ căn hộ và người thuê
+
+> **Lưu ý:** Thiết kế trong mục này đã được điều chỉnh theo mục 12: role cư dân chỉ còn `CUSTOMER`, và thông tin hợp đồng được chuyển sang entity riêng.
+
+- **Ngày:** 2026-11-26
+- **Mục tiêu:** Phân biệt loại tài khoản chủ căn hộ và người thuê; lưu thời hạn hợp đồng thuê để phục vụ bước kiểm tra hiệu lực tài khoản sau này.
+- **Phạm vi:** Thêm mới **1 file** model; chỉnh sửa **7 file** model, DTO và service.
+
+### Chi tiết thay đổi
+
+1. **`src/main/java/com/bql/feedback/model/ResidentType.java`** *(thêm mới)*
+   - Khai báo loại cư dân `OWNER` (chủ căn hộ) và `TENANT` (người thuê).
+2. **`src/main/java/com/bql/feedback/model/Role.java`**
+   - Bổ sung role `OWNER` và `TENANT`; giữ nguyên `CUSTOMER` để tương thích các tài khoản hiện có.
+3. **`src/main/java/com/bql/feedback/model/Customer.java`**
+   - Bổ sung `residentType`, `rentalContractStartDate`, `rentalContractEndDate`.
+   - Hồ sơ cũ chưa có loại cư dân được trả về mặc định là `OWNER`; constructor hiện có tiếp tục được giữ để tương thích.
+4. **`src/main/java/com/bql/feedback/dto/RegisterRequestDto.java`**
+   - Bổ sung loại cư dân và ngày bắt đầu/kết thúc hợp đồng thuê vào dữ liệu đăng ký.
+5. **`src/main/java/com/bql/feedback/service/AuthService.java`**
+   - Đăng ký với loại `TENANT` tạo tài khoản role `TENANT` và yêu cầu có đủ ngày bắt đầu/kết thúc hợp đồng; từ chối nếu ngày kết thúc trước ngày bắt đầu.
+   - Đăng ký không truyền loại cư dân mặc định là `OWNER`; chủ căn hộ không nhận ngày hợp đồng thuê.
+   - Đăng nhập nhận diện các role cư dân `CUSTOMER`, `OWNER`, `TENANT` và trả về loại cư dân cùng thời hạn hợp đồng.
+   - Chưa chặn đăng nhập hoặc thao tác khi hợp đồng chưa hiệu lực/hết hạn; kiểm tra hiệu lực và phân quyền được để lại cho giai đoạn sau theo yêu cầu.
+6. **`src/main/java/com/bql/feedback/dto/LoginResponseDto.java`**, **`CustomerResponseDto.java`** và **`src/main/java/com/bql/feedback/service/CustomerService.java`**
+   - Bổ sung loại cư dân và thời hạn hợp đồng vào dữ liệu phản hồi đăng nhập, danh sách/chi tiết cư dân.
+
+### Kết quả kiểm tra
+
+- Công cụ kiểm tra lỗi mã nguồn không phát hiện lỗi sau thay đổi.
+- Bộ test Maven chưa được chạy trong lượt cập nhật này.
+
+---
+
+## 12. Điều chỉnh mô hình cư dân, hợp đồng thuê và trạng thái chờ duyệt
+
+- **Ngày:** 2026-11-26
+- **Mục tiêu:** Giữ role xác thực duy nhất `CUSTOMER` cho cư dân, tách hợp đồng thuê khỏi hồ sơ cư dân để lưu được nhiều hợp đồng, và để tài khoản tự đăng ký ở trạng thái chờ duyệt.
+- **Phạm vi:** Thêm mới **5 file** model/repository/DTO; chỉnh sửa **8 file** model, DTO và service; thêm **1 file test**.
+
+### Chi tiết thay đổi
+
+1. **`src/main/java/com/bql/feedback/model/Role.java`**
+   - Xóa các role cư dân `OWNER` và `TENANT`; role cư dân dùng chung `CUSTOMER`.
+2. **`src/main/java/com/bql/feedback/model/ResidentType.java`** và **`Customer.java`**
+   - Giữ `ResidentType.OWNER`/`TENANT` để phân loại nghiệp vụ.
+   - Gỡ ngày hợp đồng khỏi `Customer`; hồ sơ cư dân không còn bị giới hạn vào một hợp đồng duy nhất.
+3. **`src/main/java/com/bql/feedback/model/RentalContract.java`**, **`RentalContractStatus.java`**, **`repository/RentalContractRepository.java`** *(thêm mới)*
+   - Tạo bảng `rental_contracts`, lưu riêng người thuê, mã căn hộ, ngày bắt đầu/kết thúc, trạng thái (`PENDING`, `ACTIVE`, `EXPIRED`, `TERMINATED`) và thời điểm tạo.
+   - Repository truy vấn danh sách hợp đồng theo cư dân, sắp xếp hợp đồng mới nhất trước.
+4. **`src/main/java/com/bql/feedback/model/AccountStatus.java`** và **`UserAccount.java`**
+   - Bổ sung trạng thái tài khoản `PENDING`, `APPROVED`, `REJECTED`, `DISABLED`.
+   - Tài khoản cư dân đăng ký mới được lưu với `role = CUSTOMER`, `accountStatus = PENDING`, `active = false`; đăng nhập bị từ chối khi tài khoản đang chờ duyệt hoặc đã bị từ chối.
+   - Dữ liệu tài khoản cũ chưa có `accountStatus` tiếp tục suy ra trạng thái từ cột `active`.
+5. **`RegisterRequestDto.java`**, **`AuthService.java`**, **`LoginResponseDto.java`**, **`CustomerResponseDto.java`**, **`CustomerService.java`**, **`RentalContractResponseDto.java`**
+   - Đăng ký người thuê tạo hồ sơ `Customer` loại `TENANT` và một hợp đồng `PENDING`; đăng ký chủ căn hộ không tạo hợp đồng thuê.
+   - Phản hồi đăng ký/đăng nhập và API đọc cư dân trả về loại cư dân, trạng thái tài khoản và danh sách hợp đồng tương ứng.
+   - Chưa triển khai API duyệt tài khoản, xác thực phân quyền theo role hoặc kiểm tra quyền truy cập dựa trên hiệu lực hợp đồng.
+6. **`src/test/java/com/bql/feedback/service/AuthServiceResidentRegistrationTests.java`** *(thêm mới)*
+   - Kiểm thử đăng ký người thuê tạo tài khoản `CUSTOMER` đang `PENDING` cùng hợp đồng thuê `PENDING`, và tài khoản chờ duyệt không đăng nhập được.
+
+### Chuyển đổi dữ liệu hiện có
+
+`spring.jpa.hibernate.ddl-auto=update` tạo cột/bảng mới nhưng không chuyển dữ liệu role và hợp đồng cũ. Sau khi ứng dụng tạo schema mới, cần sao chép hợp đồng cũ trước, sau đó đổi role `OWNER`/`TENANT` về `CUSTOMER`; tài khoản cư dân đã đăng ký theo cấu trúc cũ được đưa về chờ duyệt để BQL xác nhận:
+
+```sql
+INSERT INTO rental_contracts
+    (tenant_customer_id, apartment_code, start_date, end_date, status, created_at)
+SELECT c.id, c.apartment_code, c.rental_contract_start_date,
+       c.rental_contract_end_date, 'PENDING', COALESCE(c.created_at, GETDATE())
+FROM customers c
+WHERE c.resident_type = 'TENANT'
+  AND c.rental_contract_start_date IS NOT NULL
+  AND c.rental_contract_end_date IS NOT NULL
+  AND NOT EXISTS (
+      SELECT 1
+      FROM rental_contracts rc
+      WHERE rc.tenant_customer_id = c.id
+        AND rc.start_date = c.rental_contract_start_date
+        AND rc.end_date = c.rental_contract_end_date
+  );
+
+UPDATE user_accounts
+SET role = 'CUSTOMER', account_status = 'PENDING', active = 0
+WHERE customer_id IS NOT NULL;
+```
+
+### Kết quả kiểm tra
+
+- Đã bổ sung kiểm thử hồi quy cho đăng ký người thuê và đăng nhập khi tài khoản đang chờ duyệt.
+- **Lệnh chạy:** `\.\mvnw.cmd test`
+- **Kết quả:** `BUILD SUCCESS`; 3 test chạy, không có lỗi hoặc thất bại (1 test tải context ứng dụng và 2 test nghiệp vụ đăng ký/đăng nhập).
+
+---
+
+## 13. Bổ sung khóa ngoại và ràng buộc toàn vẹn cho SQL Server
+
+- **Ngày:** 2026-11-26
+- **Mục tiêu:** Bảo vệ các liên kết đang lưu bằng ID `Long` thuần bằng FK thực trong SQL Server, đồng thời thêm các ràng buộc unique/check và index cần thiết mà không phải đổi service/DTO sang quan hệ JPA.
+- **Migration:** [database/migrations/V1__relational_integrity_constraints.sql](database/migrations/V1__relational_integrity_constraints.sql)
+- **Chiến lược xóa:** Các FK dùng mặc định `NO ACTION` (RESTRICT); không xóa cứng phiếu hay lịch sử theo cascade. Tệp vật lý được quản lý riêng, nên cascade metadata của file đính kèm sẽ không tự xóa file trên ổ đĩa.
+
+### Quan hệ được ràng buộc
+
+- `feedbacks` → `customers`, `feedback_categories` (danh mục chính và tự phân loại), `staff` (nhân viên được phản ánh, được giao xử lý, manager duyệt) và `feedbacks` (phiếu gốc trùng).
+- `feedback_assignments` → `feedbacks` và `staff` (nhân viên nhận/ giao việc).
+- `feedback_attachments`, `feedback_responses`, `status_histories`, `escalation_histories`, `satisfaction_ratings` → `feedbacks`.
+- `escalation_histories` → `staff` (người chuyển cấp và manager nhận cấp).
+- `satisfaction_ratings` → `customers`.
+- `user_accounts` → `customers` hoặc `staff`; mỗi cư dân/nhân viên chỉ liên kết tối đa một tài khoản.
+- `feedback_category_keywords` → `feedback_categories` và `rental_contracts` → `customers`.
+
+Các cột đa hình `uploaded_by_id`, `author_id`, `changed_by_id` không có FK trực tiếp vì ID có thể thuộc nhiều loại đối tượng. `feedback_assignments.assigned_by_id` được xác định trong dữ liệu nghiệp vụ hiện tại là ID nhân viên và có FK đến `staff`.
+
+### Ràng buộc bổ sung
+
+- Bắt buộc `feedbacks.customer_id`, `feedbacks.status`, `feedbacks.created_at`.
+- CHECK `satisfaction_ratings.stars` từ 1 đến 5 và cấm feedback tự trỏ làm bản trùng của chính nó.
+- Filtered unique index cho email/điện thoại cư dân và ID cư dân/nhân viên ở `user_accounts`, tránh vấn đề SQL Server chỉ cho phép một giá trị `NULL` trong unique index không lọc.
+- Index các FK chính, `(feedbacks.customer_id, feedbacks.created_at)` và danh sách hợp đồng theo cư dân/ngày bắt đầu.
+- Các ràng buộc unique `feedbacks.code`, `feedback_categories.code`, `user_accounts.username`, `satisfaction_ratings.feedback_id` đã được khai báo từ trước trong entity; migration không tạo bản sao.
+
+### Preflight và áp dụng
+
+- Trước migration, đã chạy truy vấn chỉ đọc trên database `feedbackdb`: không phát hiện orphan FK, dữ liệu bắt buộc bị null, email/điện thoại hoặc liên kết tài khoản bị trùng, rating ngoài khoảng, hay feedback tự trỏ.
+- Migration chạy trong transaction, kiểm tra dữ liệu trước khi thêm constraint và rollback nếu phát hiện dữ liệu không hợp lệ.
+- Đã áp dụng migration lên SQL Server cấu hình cục bộ; xác minh có **22 FK**, **2 CHECK**, 4 filtered unique index, và 3 cột bắt buộc ở `feedbacks` đang `NOT NULL`.
+- Đây là migration SQL Server thủ công, không bật Flyway và giữ `spring.jpa.hibernate.ddl-auto=update`; cần chạy migration này trên từng môi trường sau backup và preflight, trước khi triển khai bản ứng dụng cần các ràng buộc.
+- Chưa đổi sang `ddl-auto=validate`: dự án chưa có migration baseline tạo toàn bộ schema cho database trống.
+
+### Kết quả kiểm tra
+
+- Bộ test Maven được chạy sau migration; kết quả sẽ được ghi nhận sau khi hoàn tất.
+- **Lệnh chạy:** `\.\mvnw.cmd test`
+- **Kết quả:** `BUILD SUCCESS`; 3 test chạy, không có lỗi hoặc thất bại. Spring Boot khởi động và kết nối SQL Server thành công sau khi thêm các constraint.
+
+---
+
+## 14. Bổ sung API xem và cập nhật hồ sơ cư dân (`GET/PUT /api/customers/me`, `PUT /api/customers/{id}`)
+
+- **Ngày:** 2026-11-26
+- **Mục tiêu:** Cung cấp API để cư dân tự xem/cập nhật thông tin liên hệ hồ sơ cá nhân qua Header `X-Customer-Id` và cho BQL cập nhật thông tin liên hệ cư dân theo ID, đảm bảo không làm lệch `apartmentCode` (với `rental_contracts`) hay reset nhầm `verifiedResident`.
+- **Phạm vi:** Thêm mới **2 file** (`UpdateCustomerProfileRequestDto.java`, `CustomerServiceProfileTests.java`), chỉnh sửa **3 file** (`CustomerRepository.java`, `CustomerService.java`, `CustomerController.java`).
+
+### Chi tiết thay đổi
+
+1. **`src/main/java/com/bql/feedback/dto/UpdateCustomerProfileRequestDto.java`** *(thêm mới)*
+   - Record rút gọn chỉ nhận 3 trường thông tin liên hệ: `fullName`, `phone`, `email` (không nhận `apartmentCode` và các trường quản trị hệ thống).
+2. **`src/main/java/com/bql/feedback/repository/CustomerRepository.java`** *(chỉnh sửa)*
+   - **Thêm:** `Optional<Customer> findByEmailIgnoreCase(String email);` để kiểm tra trùng email không phân biệt hoa thường đồng nhất giữa Java và Filtered Unique Index dưới SQL Server.
+3. **`src/main/java/com/bql/feedback/service/CustomerService.java`** *(chỉnh sửa)*
+   - **Thêm:** `updateProfile(Long customerId, UpdateCustomerProfileRequestDto request, boolean isSelfUpdate)` (`@Transactional`):
+     - Kiểm tra `request` và 3 trường `fullName`, `phone`, `email` không null/blank (`BusinessException`), chuẩn hóa `trim()` cả 3 trường và đưa `email` về `toLowerCase(Locale.ROOT)`.
+     - Tìm `Customer` theo `customerId` (`NotFoundException` nếu không tồn tại); chặn hồ sơ `!active` (`BusinessException`) và chặn tài khoản bị khóa spam tự cập nhật khi `isSelfUpdate && blocked` (`BusinessException`), trong khi BQL (`isSelfUpdate = false`) vẫn sửa được thông tin liên hệ khi cần.
+     - Kiểm tra trùng `email` (`findByEmailIgnoreCase`) và `phone` (`findByPhone`) với cư dân khác (`id != customerId`).
+     - Chỉ cập nhật `fullName`, `phone`, `email`; giữ nguyên `apartmentCode`, `residentType`, `verifiedResident` và các trường quản trị.
+4. **`src/main/java/com/bql/feedback/controller/CustomerController.java`** *(chỉnh sửa)*
+   - **Thêm:**
+     - `GET /api/customers/me` (Header `X-Customer-Id`) → gọi `getCustomerById(customerId)`.
+     - `PUT /api/customers/me` (Header `X-Customer-Id`) → gọi `updateProfile(customerId, request, true)`.
+     - `PUT /api/customers/{id}` → gọi `updateProfile(id, request, false)`.
+5. **`src/test/java/com/bql/feedback/service/CustomerServiceProfileTests.java`** *(thêm mới)*
+   - Bổ sung 8 unit test kiểm thử: chuẩn hóa `trim`/`toLowerCase` và giữ nguyên `apartmentCode`/`verifiedResident`, giữ nguyên email/phone của chính mình, chặn trùng email/phone người khác, chặn cư dân `blocked` tự sửa nhưng cho phép BQL sửa, chặn hồ sơ `!active`, báo `NotFoundException` khi không tồn tại, và báo `BusinessException` khi bỏ trống trường bắt buộc.
+
+### Kết quả kiểm tra
+
+- **Biên dịch:** Thành công toàn bộ **65 file** nguồn chính và **3 file** test (`BUILD SUCCESS`).
+- **Kiểm thử unit test:** `.\mvnw.cmd test -o -Dtest=CustomerServiceProfileTests,AuthServiceResidentRegistrationTests` → **`Tests run: 10, Failures: 0, Errors: 0, Skipped: 0`** (`CustomerServiceProfileTests`: 8 passed, `AuthServiceResidentRegistrationTests`: 2 passed, `BUILD SUCCESS`).
+
+---
+
+## 15. Chuẩn hóa & kiểm tra định dạng Email/SĐT dùng chung (`ContactValidationUtil`)
+
+- **Ngày:** 2026-11-26
+- **Mục tiêu:** Chặn dữ liệu `email` và `phone` sai định dạng đồng nhất giữa luồng đăng ký (`AuthService`) và cập nhật hồ sơ (`CustomerService`), đồng thời chuẩn hóa SĐT đầu `+84` về `0` trước khi kiểm tra trùng lặp và lưu xuống DB; giữ nguyên `user_accounts.username` độc lập.
+- **Phạm vi:** Thêm mới **1 file** (`ContactValidationUtil.java`), chỉnh sửa **4 file** (`CustomerService.java`, `AuthService.java`, `CustomerServiceProfileTests.java`, `AuthServiceResidentRegistrationTests.java`).
+
+### Chi tiết thay đổi
+
+1. **`src/main/java/com/bql/feedback/util/ContactValidationUtil.java`** *(thêm mới)*
+   - `normalizeAndValidateEmail(String rawEmail)`: kiểm tra rỗng, chuẩn hóa `trim()` + `toLowerCase(Locale.ROOT)`, kiểm tra Regex `^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$` (sai định dạng ném `BusinessException`).
+   - `normalizeAndValidatePhone(String rawPhone)`: kiểm tra rỗng, chuẩn hóa `trim()`, kiểm tra Regex `^(0|\+84)[0-9]{9}$` (sai định dạng ném `BusinessException`), và chuẩn hóa đầu `+84` về `0` (`"0" + phone.substring(3)`) để tránh lệch giữa `0901234567` và `+84901234567` khi kiểm tra trùng `findByPhone` và Filtered Unique Index dưới SQL Server.
+2. **`src/main/java/com/bql/feedback/service/CustomerService.java`** *(chỉnh sửa)*
+   - **Sửa:** Gọi `ContactValidationUtil.normalizeAndValidatePhone(...)` và `ContactValidationUtil.normalizeAndValidateEmail(...)` trong `updateProfile(...)`. Không đồng bộ sang `user_accounts.username`.
+3. **`src/main/java/com/bql/feedback/service/AuthService.java`** *(chỉnh sửa)*
+   - **Sửa:** Gọi cùng 2 hàm chuẩn hóa/kiểm tra trên trong `registerCustomer(...)` để đồng nhất luật giữa đăng ký và cập nhật hồ sơ.
+4. **`src/test/java/com/bql/feedback/service/CustomerServiceProfileTests.java`** & **`AuthServiceResidentRegistrationTests.java`** *(chỉnh sửa)*
+   - Bổ sung 5 unit test cho email sai định dạng, SĐT sai định dạng, chuẩn hóa `+84` → `0` + `email.toLowerCase()`, và phát hiện trùng giữa `+84...` với `0...`.
+
+### Kết quả kiểm tra
+
+- **Biên dịch:** Thành công toàn bộ **66 file** nguồn chính và **3 file** test (`BUILD SUCCESS`).
+- **Kiểm thử unit test:** `.\mvnw.cmd test -o -Dtest=CustomerServiceProfileTests,AuthServiceResidentRegistrationTests` → **`Tests run: 15, Failures: 0, Errors: 0, Skipped: 0`** (`CustomerServiceProfileTests`: 11 passed, `AuthServiceResidentRegistrationTests`: 4 passed, `BUILD SUCCESS`).
