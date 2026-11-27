@@ -16,6 +16,7 @@ public record LoginResponseDto(
         LocalDateTime lastLoginAt,
         String residentType,
         String accountStatus,
-        List<RentalContractResponseDto> rentalContracts
+        List<RentalContractResponseDto> rentalContracts,
+        String token
 ) {
 }

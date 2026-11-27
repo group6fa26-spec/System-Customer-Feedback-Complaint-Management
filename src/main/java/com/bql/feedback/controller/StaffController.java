@@ -3,12 +3,14 @@ package com.bql.feedback.controller;
 import com.bql.feedback.dto.StaffResponseDto;
 import com.bql.feedback.service.StaffService;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
 @RestController
 @RequestMapping("/api/staff")
+@PreAuthorize("hasAnyRole('CUSTOMER', 'CS_STAFF', 'DEPT_STAFF', 'CS_MANAGER')")
 public class StaffController {
 
     private final StaffService staffService;

@@ -582,3 +582,392 @@ Các cột đa hình `uploaded_by_id`, `author_id`, `changed_by_id` không có F
 
 - **Biên dịch:** Thành công toàn bộ **66 file** nguồn chính và **3 file** test (`BUILD SUCCESS`).
 - **Kiểm thử unit test:** `.\mvnw.cmd test -o -Dtest=CustomerServiceProfileTests,AuthServiceResidentRegistrationTests` → **`Tests run: 15, Failures: 0, Errors: 0, Skipped: 0`** (`CustomerServiceProfileTests`: 11 passed, `AuthServiceResidentRegistrationTests`: 4 passed, `BUILD SUCCESS`).
+
+---
+
+## 16. Bổ sung API duyệt / từ chối tài khoản cư dân (`/api/accounts/**`, chỉ `CS_MANAGER`)
+
+- **Ngày:** 2026-11-27
+- **Mục tiêu:** Cung cấp luồng quản trị duyệt/từ chối tài khoản cư dân đang ở trạng thái `PENDING` (`PENDING` → `APPROVED` / `REJECTED`), chỉ cho phép `CS_MANAGER` đang hoạt động thực hiện, đồng bộ trạng thái `verifiedResident`, `active` và hợp đồng thuê `RentalContract`, đồng thời tránh N+1 query khi xem danh sách chờ duyệt.
+- **Phạm vi:** Thêm mới **5 file** (`ForbiddenException.java`, `AccountApprovalResponseDto.java`, `AccountApprovalService.java`, `AccountApprovalController.java`, `AccountApprovalServiceTests.java`), chỉnh sửa **3 file** (`GlobalExceptionHandler.java`, `UserAccountRepository.java`, `RentalContractRepository.java`).
+
+### Chi tiết thay đổi
+
+1. **`src/main/java/com/bql/feedback/exception/ForbiddenException.java`** *(thêm mới)* & **`GlobalExceptionHandler.java`** *(chỉnh sửa)*
+   - Bổ sung ngoại lệ `ForbiddenException` và handler trả HTTP **`403 Forbidden`** đúng chuẩn `ErrorResponse`.
+2. **`src/main/java/com/bql/feedback/repository/UserAccountRepository.java`** *(chỉnh sửa)*
+   - **Thêm:** `List<UserAccount> findByRoleAndAccountStatusOrderByCreatedAtAsc(Role role, AccountStatus accountStatus);`
+3. **`src/main/java/com/bql/feedback/repository/RentalContractRepository.java`** *(chỉnh sửa)*
+   - **Thêm:** `List<RentalContract> findByTenantCustomerIdInOrderByStartDateDesc(Collection<Long> tenantCustomerIds);` phục vụ truy vấn gom theo lô.
+4. **`src/main/java/com/bql/feedback/dto/AccountApprovalResponseDto.java`** *(thêm mới)*
+   - Record trả về thông tin tài khoản, hồ sơ cư dân và danh sách hợp đồng thuê (không trả `password`).
+5. **`src/main/java/com/bql/feedback/service/AccountApprovalService.java`** *(thêm mới)*
+   - **Phân quyền:** Kiểm tra `staffId` từ `StaffRepository` phải tồn tại, `active = true` và có `role == Role.CS_MANAGER`; mọi vai trò khác (`CS_STAFF`, `DEPT_STAFF`, `CUSTOMER`...) bị chặn bằng `ForbiddenException` (`403`). *(Khi nâng cấp Spring Security + JWT, chỉ cần thêm `@PreAuthorize("hasRole('CS_MANAGER')")` ở Controller và đọc `staffId` từ SecurityContext.)*
+   - **`getPendingAccounts(Long staffId)`:** Query đúng 3 lượt theo lô (`findByRoleAndAccountStatusOrderByCreatedAtAsc` → `customerRepository.findAllById(customerIds)` → `rentalContractRepository.findByTenantCustomerIdInOrderByStartDateDesc(customerIds)`) rồi map theo `Map<Long, ...>` để tránh hoàn toàn N+1 query.
+   - **`approve(Long accountId, Long staffId)` (`@Transactional`):**
+     - Chỉ duyệt tài khoản `Role.CUSTOMER` đang `PENDING`.
+     - Với `ResidentType.TENANT`: bắt buộc phải có hợp đồng `PENDING` và **chặn duyệt bằng `BusinessException`** nếu hợp đồng đã hết hạn (`endDate < LocalDate.now()`); nếu hợp lệ thì chuyển hợp đồng `PENDING` → `ACTIVE`.
+     - Đặt `Customer` (`verifiedResident = true`, `active = true`) và `UserAccount` (`accountStatus = APPROVED`, `active = true`).
+   - **`reject(Long accountId, Long staffId)` (`@Transactional`):**
+     - Chỉ từ chối tài khoản `Role.CUSTOMER` đang `PENDING`.
+     - Đặt `Customer` (`verifiedResident = false`, `active = false`), `UserAccount` (`accountStatus = REJECTED`, `active = false`), và chuyển các hợp đồng `PENDING` của `TENANT` sang `TERMINATED`.
+6. **`src/main/java/com/bql/feedback/controller/AccountApprovalController.java`** *(thêm mới)*
+   - Cung cấp 3 endpoint dưới `/api/accounts` (nhận Header `X-Staff-Id`):
+     - `GET /api/accounts/pending`
+     - `POST /api/accounts/{accountId}/approve`
+     - `POST /api/accounts/{accountId}/reject`
+7. **`src/test/java/com/bql/feedback/service/AccountApprovalServiceTests.java`** *(thêm mới)*
+   - 7 unit test kiểm thử: phân quyền chặt chỉ `CS_MANAGER` active (`403` cho `CS_STAFF`/`DEPT_STAFF`/inactive/unknown), duyệt `OWNER`, duyệt `TENANT` kích hoạt hợp đồng hợp lệ, chặn duyệt `TENANT` khi hợp đồng hết hạn (không lưu DB), từ chối `TENANT` hủy hợp đồng & set inactive, chặn duyệt tài khoản không phải `PENDING`/tài khoản Staff/`404`, và xác minh `getPendingAccounts` dùng batch query không phát sinh N+1.
+
+### Kết quả kiểm tra
+
+- **Biên dịch:** Thành công toàn bộ **70 file** nguồn chính và **4 file** test (`BUILD SUCCESS`).
+- **Kiểm thử unit test:** `.\mvnw.cmd test -o -Dtest=AccountApprovalServiceTests,CustomerServiceProfileTests,AuthServiceResidentRegistrationTests` → **`Tests run: 22, Failures: 0, Errors: 0, Skipped: 0`** (`AccountApprovalServiceTests`: 7 passed, `CustomerServiceProfileTests`: 11 passed, `AuthServiceResidentRegistrationTests`: 4 passed, `BUILD SUCCESS`).
+
+---
+
+## 17. Bổ sung dependency Spring Security & JWT vào `pom.xml`
+
+- **Ngày:** 2026-11-27
+- **Mục tiêu:** Chuẩn bị nền tảng thư viện bảo mật (BCrypt, `@PreAuthorize`, `SecurityFilterChain`, tạo/đọc JWT và kiểm thử bảo mật), không thêm H2 theo yêu cầu.
+- **Phạm vi:** Chỉnh sửa **1 file** (`pom.xml`).
+
+### Chi tiết thay đổi
+
+1. **`pom.xml`** *(chỉnh sửa)*
+   - **Thêm 5 dependency:**
+     - `org.springframework.boot:spring-boot-starter-security` *(Spring Boot 4.1.2 / Spring Security 7.1.2)*
+     - `io.jsonwebtoken:jjwt-api:0.12.6`
+     - `io.jsonwebtoken:jjwt-impl:0.12.6` (`runtime`)
+     - `io.jsonwebtoken:jjwt-jackson:0.12.6` (`runtime`)
+     - `org.springframework.security:spring-security-test` (`test`, Spring Security 7.1.2)
+   - **Lưu ý:** Chưa tạo `SecurityConfig` ở bước này nên khi chạy ứng dụng ngay lập tức, Spring Security mặc định sẽ yêu cầu xác thực cho toàn bộ endpoint cho tới khi bổ sung `SecurityFilterChain`.
+
+### Kết quả kiểm tra
+
+- **Tải dependency & biên dịch:** `.\mvnw.cmd test-compile` → tải đầy đủ các artifact từ Maven Central và biên dịch thành công (`BUILD SUCCESS`).
+- **Kiểm thử unit test:** `.\mvnw.cmd test -o -Dtest=AccountApprovalServiceTests,CustomerServiceProfileTests,AuthServiceResidentRegistrationTests` → **`Tests run: 22, Failures: 0, Errors: 0, Skipped: 0`** (`BUILD SUCCESS`).
+
+---
+
+## 18. Bổ sung cấu hình JWT & giới hạn đăng nhập sai vào `application.properties`
+
+- **Ngày:** 2026-11-27
+- **Mục tiêu:** Đưa khóa bí mật JWT, thời hạn token và ngưỡng khóa chống dò mật khẩu vào cấu hình ngoài (hỗ trợ ghi đè bằng biến môi trường khi deploy, không viết cứng trong code).
+- **Phạm vi:** Chỉnh sửa **1 file** (`src/main/resources/application.properties`).
+
+### Chi tiết thay đổi
+
+1. **`src/main/resources/application.properties`** *(chỉnh sửa)*
+   - **Thêm cấu hình JWT:**
+     - `app.security.jwt.secret=${JWT_SECRET:bql-feedback-dev-jwt-secret-key-minimum-32-bytes-2026}` *(chỉ dùng mặc định cho môi trường dev; khi deploy bắt buộc đặt biến môi trường `JWT_SECRET`)*
+     - `app.security.jwt.expiration-minutes=${JWT_EXPIRATION_MINUTES:480}` *(8 giờ)*
+   - **Thêm cấu hình chống dò mật khẩu:**
+     - `app.security.login.max-failed-attempts=${LOGIN_MAX_FAILED_ATTEMPTS:5}`
+     - `app.security.login.lock-minutes=${LOGIN_LOCK_MINUTES:15}`
+
+---
+
+## 19. Bổ sung Exception bảo mật (`401`, `403`, `429`) & cập nhật `GlobalExceptionHandler`
+
+- **Ngày:** 2026-11-27
+- **Mục tiêu:** Chuẩn bị đầy đủ các lớp ngoại lệ và handler ở tầng Controller/Service cho luồng xác thực, phân quyền và chống dò mật khẩu.
+- **Phạm vi:** Thêm mới **3 file** (`UnauthorizedException.java`, `TooManyRequestsException.java`, `GlobalExceptionHandlerTests.java`), chỉnh sửa **1 file** (`GlobalExceptionHandler.java`). *(Tái sử dụng `ForbiddenException.java` đã tạo ở mục 16.)*
+
+### Chi tiết thay đổi
+
+1. **`src/main/java/com/bql/feedback/exception/UnauthorizedException.java`** *(thêm mới)*
+   - Ngoại lệ `RuntimeException` trả HTTP `401 Unauthorized`.
+2. **`src/main/java/com/bql/feedback/exception/TooManyRequestsException.java`** *(thêm mới)*
+   - Ngoại lệ `RuntimeException` trả HTTP `429 Too Many Requests`, hỗ trợ constructor `(String message, long retryAfterSeconds)` và overload `(String message)` mặc định `0` giây.
+3. **`src/main/java/com/bql/feedback/exception/GlobalExceptionHandler.java`** *(chỉnh sửa)*
+   - **Thêm handler:**
+     - `UnauthorizedException` → `401 Unauthorized`
+     - `AuthenticationException` *(phủ `AuthenticationCredentialsNotFoundException` từ `SecurityUtils`)* → `401 Unauthorized` với message cố định `"Vui lòng đăng nhập"` (không lộ chi tiết nội bộ của Spring Security)
+     - `AccessDeniedException` *(phủ lỗi phân quyền `@PreAuthorize` ở tầng Controller/Service)* → `403 Forbidden`
+     - `TooManyRequestsException` → `429 Too Many Requests`, tự gắn header `Retry-After` khi `retryAfterSeconds > 0`
+   - **Giữ nguyên:** `ForbiddenException` → `403 Forbidden`.
+4. **`src/test/java/com/bql/feedback/exception/GlobalExceptionHandlerTests.java`** *(thêm mới)*
+   - 3 unit test kiểm tra trực tiếp mã `401`, `403`, `429` và header `Retry-After` (có và không có `retryAfterSeconds`).
+
+### Lưu ý phạm vi hiện tại
+
+- Lỗi `401` và `403` phát sinh ở **tầng filter** (không có token, token sai/hết hạn) **chưa được xử lý** tại `GlobalExceptionHandler` — sẽ được xử lý ở `SecurityConfig` (`authenticationEntryPoint` và `accessDeniedHandler`) trong bước tiếp theo.
+- Hiện chưa có chỗ nào ném `UnauthorizedException` và `TooManyRequestsException`; chúng sẽ được sử dụng ở `AuthService` và `LoginAttemptService` ở các bước sau.
+- Chưa chỉnh sửa constructor hay logic của `AuthService`, nên `AuthServiceResidentRegistrationTests` tiếp tục pass bình thường.
+
+### Kết quả kiểm tra
+
+- **Biên dịch:** Thành công toàn bộ **72 file** nguồn chính và **5 file** test (`BUILD SUCCESS`).
+- **Kiểm thử unit test:** `.\mvnw.cmd test -o -Dtest=GlobalExceptionHandlerTests,AccountApprovalServiceTests,CustomerServiceProfileTests,AuthServiceResidentRegistrationTests` → **`Tests run: 25, Failures: 0, Errors: 0, Skipped: 0`** (`GlobalExceptionHandlerTests`: 3, `AccountApprovalServiceTests`: 7, `AuthServiceResidentRegistrationTests`: 4, `CustomerServiceProfileTests`: 11 — `BUILD SUCCESS`).
+
+---
+
+## 20. Triển khai `AuthenticatedUser` và `JwtService` (Bước đầu mục 1.5)
+
+- **Ngày:** 2026-11-27
+- **Mục tiêu:** Xây dựng đối tượng principal `AuthenticatedUser` và dịch vụ tạo/giải mã JWT (`JwtService`) bằng JJWT `0.12.6` (HS256), đọc cấu hình `app.security.jwt.*` và kiểm thử độc lập trước khi triển khai filter.
+- **Phạm vi:** Thêm mới **3 file** (`AuthenticatedUser.java`, `JwtService.java`, `JwtServiceTests.java`).
+
+### Chi tiết thay đổi
+
+1. **`src/main/java/com/bql/feedback/security/AuthenticatedUser.java`** *(thêm mới)*
+   - Record đại diện người dùng đã xác thực: `accountId`, `username`, `role`, `customerId`, `staffId`.
+2. **`src/main/java/com/bql/feedback/security/JwtService.java`** *(thêm mới)*
+   - Constructor nhận `@Value("${app.security.jwt.secret}") String secret` (không đặt default để báo lỗi sớm nếu thiếu cấu hình) và `@Value("${app.security.jwt.expiration-minutes:480}") long expirationMinutes`.
+   - Chuyển `secret` sang UTF-8 bytes và chặn bằng `IllegalStateException` nếu độ dài `< 32` byte (yêu cầu tối thiểu của HS256) hoặc `expirationMinutes <= 0`.
+   - `generateToken(...)`: ký token HS256 gồm `subject` (`username`), `accountId`, `role`, `issuedAt`, `expiration`, và chỉ đính kèm `customerId`/`staffId` khi khác `null`.
+   - `parse(String token)`: đọc `accountId`, `customerId`, `staffId` an toàn qua `Number` → `.longValue()` (tránh lỗi ép kiểu `Integer` → `Long`), kiểm tra `accountId`, `subject`, `role` không null/blank (thiếu thì ném `MalformedJwtException`).
+3. **`src/test/java/com/bql/feedback/security/JwtServiceTests.java`** *(thêm mới)*
+   - 6 unit test xác minh ở runtime: tạo & parse token cư dân (`customerId != null`, `staffId == null`), nhân viên (`staffId != null`, `customerId == null`), từ chối token bị sửa, token hết hạn, token thiếu claim bắt buộc, và từ chối secret ngắn `< 32` byte / `expirationMinutes <= 0`.
+
+### Lưu ý phạm vi hiện tại
+
+- `JwtAuthenticationFilter` và `SecurityUtils` sẽ được triển khai ở bước tiếp theo sau khi duyệt.
+
+### Kết quả kiểm tra
+
+- **Biên dịch:** Thành công toàn bộ **74 file** nguồn chính và **6 file** test (`BUILD SUCCESS`).
+- **Kiểm thử unit test:** `.\mvnw.cmd test -o -Dtest=JwtServiceTests,GlobalExceptionHandlerTests,AccountApprovalServiceTests,CustomerServiceProfileTests,AuthServiceResidentRegistrationTests` → **`Tests run: 31, Failures: 0, Errors: 0, Skipped: 0`** (`JwtServiceTests`: 6, `GlobalExceptionHandlerTests`: 3, `AccountApprovalServiceTests`: 7, `AuthServiceResidentRegistrationTests`: 4, `CustomerServiceProfileTests`: 11 — `BUILD SUCCESS`).
+
+---
+
+## 21. Triển khai `JwtAuthenticationFilter` và `SecurityConfig`
+
+- **Ngày:** 2026-11-27
+- **Mục tiêu:** Thiết lập tầng lọc xác thực JWT (`OncePerRequestFilter`) và `SecurityFilterChain` stateless (`@EnableMethodSecurity`, `BCryptPasswordEncoder`, CORS, trả JSON `ErrorResponse` chuẩn cho 401/403 ở tầng filter).
+- **Phạm vi:** Thêm mới **3 file** (`JwtAuthenticationFilter.java`, `SecurityConfig.java`, `JwtAuthenticationFilterTests.java`).
+
+### Chi tiết thay đổi
+
+1. **`src/main/java/com/bql/feedback/security/JwtAuthenticationFilter.java`** *(thêm mới)*
+   - Kế thừa `OncePerRequestFilter`, **không gắn `@Component`** (được khởi tạo bằng `new JwtAuthenticationFilter(jwtService)` trong `SecurityConfig`) để tránh Spring Boot tự đăng ký lặp ngoài `SecurityFilterChain`.
+   - Đọc header `Authorization: Bearer <token>`, `trim()` và kiểm tra rỗng, gọi `jwtService.parse(token)` để nạp `AuthenticatedUser` + `SimpleGrantedAuthority("ROLE_" + user.role())` vào `SecurityContextHolder`.
+   - Khi gặp `JwtException | IllegalArgumentException`, gọi `SecurityContextHolder.clearContext()` và tiếp tục chain để Spring Security trả `401`.
+2. **`src/main/java/com/bql/feedback/config/SecurityConfig.java`** *(thêm mới)*
+   - `@Configuration`, `@EnableMethodSecurity`, constructor tường minh (không dùng Lombok).
+   - Khai báo bean `PasswordEncoder` (`BCryptPasswordEncoder`).
+   - Cấu hình `SecurityFilterChain`: tắt CSRF, bật `.cors(Customizer.withDefaults())` (tái sử dụng `CorsConfig`), `SessionCreationPolicy.STATELESS`, `permitAll()` cho `OPTIONS /**`, `/api/auth/login`, `/api/auth/register` và các route ngoài `/api/**` (Swagger UI...), yêu cầu `authenticated()` cho `/api/**`.
+   - `authenticationEntryPoint` (`401` — `"Vui lòng đăng nhập"`) và `accessDeniedHandler` (`403` — `"Bạn không có quyền thực hiện thao tác này"`) ghi thẳng JSON theo đúng 4 trường của `ErrorResponse` với `application/json;charset=UTF-8`.
+3. **`src/test/java/com/bql/feedback/security/JwtAuthenticationFilterTests.java`** *(thêm mới)*
+   - 3 unit test xác minh: token hợp lệ nạp đúng `AuthenticatedUser` và authority `ROLE_CS_MANAGER`; token lỗi xóa sạch `SecurityContextHolder` và vẫn đi tiếp chain; thiếu header hoặc Bearer rỗng giữ context rỗng.
+
+### Lưu ý phạm vi hiện tại
+
+- Đã hoàn tất xử lý `401`/`403` ở tầng filter (`SecurityConfig`).
+- Bước tiếp theo là `SecurityUtils`, `LoginAttemptService` và nâng cấp `AuthService` (BCrypt + phát hành JWT) cùng chuyển các controller từ `X-Customer-Id`/`X-Staff-Id` sang principal từ JWT.
+
+### Kết quả kiểm tra
+
+- **Biên dịch:** Thành công toàn bộ **76 file** nguồn chính và **7 file** test (`BUILD SUCCESS`).
+- **Kiểm thử unit test:** `.\mvnw.cmd test -o -Dtest=JwtAuthenticationFilterTests,JwtServiceTests,GlobalExceptionHandlerTests,AccountApprovalServiceTests,CustomerServiceProfileTests,AuthServiceResidentRegistrationTests` → **`Tests run: 34, Failures: 0, Errors: 0, Skipped: 0`** (`JwtAuthenticationFilterTests`: 3, `JwtServiceTests`: 6, `GlobalExceptionHandlerTests`: 3, `AccountApprovalServiceTests`: 7, `AuthServiceResidentRegistrationTests`: 4, `CustomerServiceProfileTests`: 11 — `BUILD SUCCESS`).
+
+---
+
+## 22. Triển khai `LoginAttemptService` và nâng cấp `AuthService` (BCrypt + JWT + khóa tạm `429`)
+
+- **Ngày:** 2026-11-27
+- **Mục tiêu:** Mã hóa mật khẩu đăng ký bằng BCrypt, kiểm tra mật khẩu thuần BCrypt khi đăng nhập, giới hạn số lần đăng nhập sai (`429 Too Many Requests` + `Retry-After`), trả `401 Unauthorized` khi sai thông tin đăng nhập, và phát hành JWT trong `LoginResponseDto.token`.
+- **Phạm vi:** Thêm mới **2 file** (`LoginAttemptService.java`, `LoginAttemptServiceTests.java`), chỉnh sửa **3 file** (`LoginResponseDto.java`, `AuthService.java`, `AuthServiceResidentRegistrationTests.java`).
+
+### Chi tiết thay đổi
+
+1. **`src/main/java/com/bql/feedback/security/LoginAttemptService.java`** *(thêm mới)*
+   - Đọc `@Value("${app.security.login.max-failed-attempts:5}")` và `@Value("${app.security.login.lock-minutes:15}")`, theo dõi số lần nhập sai theo `username` (lowercase) an toàn luồng với `ConcurrentHashMap`.
+   - `checkAllowed(username)`: nếu đang trong thời gian khóa, tính `retryAfterSeconds` (làm tròn lên, tối thiểu `1`) và ném `TooManyRequestsException` (`429` + header `Retry-After`).
+   - `recordFailure(username)` tăng bộ đếm và kích hoạt khóa khi đạt ngưỡng `maxAttempts`; `recordSuccess(username)` xóa trạng thái sai.
+2. **`src/main/java/com/bql/feedback/dto/LoginResponseDto.java`** *(chỉnh sửa)*
+   - **Thêm:** component `String token` vào cuối record (`token` chứa JWT khi `login` thành công; `null` khi `registerCustomer` do tài khoản đang `PENDING`).
+3. **`src/main/java/com/bql/feedback/service/AuthService.java`** *(chỉnh sửa)*
+   - Inject thêm `PasswordEncoder`, `JwtService`, `LoginAttemptService`.
+   - **`registerCustomer`:** mã hóa mật khẩu bằng `passwordEncoder.encode(...)` trước khi lưu, trả `token = null`.
+   - **`login`:**
+     1. Gọi `loginAttemptService.checkAllowed(username)` trước khi tra DB / kiểm tra mật khẩu.
+     2. Xác thực mật khẩu thuần BCrypt bằng `passwordEncoder.matches(...)`; sai username hoặc mật khẩu → gọi `loginAttemptService.recordFailure(username)` và ném `UnauthorizedException("Tên đăng nhập hoặc mật khẩu không đúng")` (`401`).
+     3. Tài khoản đúng mật khẩu nhưng `PENDING`/`REJECTED`/`DISABLED`/`!active` → ném `BusinessException` hiện tại, không ghi nhận sai mật khẩu.
+     4. Đăng nhập thành công → gọi `loginAttemptService.recordSuccess(username)`, sinh JWT qua `jwtService.generateToken(...)` và trả trong `LoginResponseDto.token`.
+4. **`src/test/java/com/bql/feedback/security/LoginAttemptServiceTests.java`** *(thêm mới)* & **`AuthServiceResidentRegistrationTests.java`** *(chỉnh sửa)*
+   - Bổ sung unit test cho cơ chế khóa tạm/tự mở khóa theo thời gian, reset khi thành công, mã hóa BCrypt khi đăng ký (`token == null`), cấp JWT hợp lệ khi đăng nhập thành công, ném `UnauthorizedException` (`401`) khi sai mật khẩu, khóa `TooManyRequestsException` (`429`) sau khi vượt ngưỡng, và không tính lỗi khóa khi tài khoản đang `PENDING`.
+
+### Lưu ý dữ liệu hiện có trong SQL Server
+
+- Các tài khoản test cũ đang lưu mật khẩu dạng plain-text (như `'123456'`) sẽ không khớp `BCryptPasswordEncoder.matches(...)`; cần cập nhật sang hash BCrypt hoặc đăng ký lại tài khoản mới.
+
+### Kết quả kiểm tra
+
+- **Biên dịch:** Thành công toàn bộ **77 file** nguồn chính và **8 file** test (`BUILD SUCCESS`).
+- **Kiểm thử unit test:** `.\mvnw.cmd test -o -Dtest=LoginAttemptServiceTests,AuthServiceResidentRegistrationTests,JwtAuthenticationFilterTests,JwtServiceTests,GlobalExceptionHandlerTests,AccountApprovalServiceTests,CustomerServiceProfileTests` → **`Tests run: 38, Failures: 0, Errors: 0, Skipped: 0`** (`LoginAttemptServiceTests`: 2, `AuthServiceResidentRegistrationTests`: 6, `JwtAuthenticationFilterTests`: 3, `JwtServiceTests`: 6, `GlobalExceptionHandlerTests`: 3, `AccountApprovalServiceTests`: 7, `CustomerServiceProfileTests`: 11 — `BUILD SUCCESS`).
+
+---
+
+## 23. Triển khai `SecurityUtils`
+
+- **Ngày:** 2026-11-27
+- **Mục tiêu:** Cung cấp điểm truy cập duy nhất lấy thông tin người dùng hiện tại từ `SecurityContextHolder` (principal `AuthenticatedUser` do `JwtAuthenticationFilter` nạp), phục vụ chuyển đổi các Controller từ header `X-Customer-Id` / `X-Staff-Id` sang JWT.
+- **Phạm vi:** Thêm mới **2 file** (`SecurityUtils.java`, `SecurityUtilsTests.java`).
+
+### Chi tiết thay đổi
+
+1. **`src/main/java/com/bql/feedback/security/SecurityUtils.java`** *(thêm mới)*
+   - `currentUser()`: kiểm tra `auth != null`, `auth.isAuthenticated()`, `!(auth instanceof AnonymousAuthenticationToken)` và `principal instanceof AuthenticatedUser` — không hợp lệ ném `AuthenticationCredentialsNotFoundException` (`401`).
+   - `currentCustomerId()`: kiểm tra `"CUSTOMER".equals(user.role()) && user.customerId() != null`, sai ném `ForbiddenException` (`403`).
+   - `currentStaffId()`: kiểm tra `isStaff(user) && user.staffId() != null`, sai ném `ForbiddenException` (`403`).
+   - `currentActorId()`, `currentRole()`, `isCustomer()`, `isStaff()`, `isStaff(AuthenticatedUser)`: hỗ trợ đồng nhất cho upload tệp đính kèm và kiểm tra chủ sở hữu phiếu.
+2. **`src/test/java/com/bql/feedback/security/SecurityUtilsTests.java`** *(thêm mới)*
+   - 3 unit test kiểm tra: chưa đăng nhập / anonymous / token chưa authenticated ném `AuthenticationCredentialsNotFoundException`; principal cư dân lấy đúng `customerId` và chặn `currentStaffId()`; principal nhân viên lấy đúng `staffId` và chặn `currentCustomerId()`.
+
+### Kết quả kiểm tra
+
+- **Biên dịch:** Thành công toàn bộ **78 file** nguồn chính và **9 file** test (`BUILD SUCCESS`).
+- **Kiểm thử unit test:** `.\mvnw.cmd test -o -Dtest=SecurityUtilsTests,LoginAttemptServiceTests,AuthServiceResidentRegistrationTests,JwtAuthenticationFilterTests,JwtServiceTests,GlobalExceptionHandlerTests,AccountApprovalServiceTests,CustomerServiceProfileTests` → **`Tests run: 41, Failures: 0, Errors: 0, Skipped: 0`** (`SecurityUtilsTests`: 3, `LoginAttemptServiceTests`: 2, `AuthServiceResidentRegistrationTests`: 6, `JwtAuthenticationFilterTests`: 3, `JwtServiceTests`: 6, `GlobalExceptionHandlerTests`: 3, `AccountApprovalServiceTests`: 7, `CustomerServiceProfileTests`: 11 — `BUILD SUCCESS`).
+
+---
+
+## 24. Chuyển toàn bộ 6 Controller từ `X-Customer-Id` / `X-Staff-Id` sang JWT (`SecurityUtils`) & `@PreAuthorize`
+
+- **Ngày:** 2026-11-27
+- **Mục tiêu:** Loại bỏ hoàn toàn cơ chế tự khai báo định danh qua header `X-Customer-Id` / `X-Staff-Id` và body giả mạo (`customerId`/`staffId`), chuyển sang lấy principal từ JWT qua `SecurityUtils`, gắn phân quyền `@PreAuthorize` đồng bộ với `ROLE_<Role.name()>` và kiểm tra quyền sở hữu phiếu (`Objects.equals`) cho cư dân.
+- **Phạm vi:** Thêm mới **1 file** test (`FeedbackSecurityAccessTests.java`), chỉnh sửa **9 file** (`AccountApprovalController.java`, `AccountApprovalService.java`, `CustomerController.java`, `FeedbackController.java`, `FeedbackService.java`, `FeedbackAttachmentController.java`, `FeedbackAttachmentService.java`, `StaffController.java`, `FeedbackCategoryController.java`).
+
+### Chi tiết thay đổi
+
+1. **`AccountApprovalController.java` & `AccountApprovalService.java`**
+   - Gắn `@PreAuthorize("hasRole('CS_MANAGER')")` cấp class; bỏ `@RequestHeader("X-Staff-Id")` ở cả 3 endpoint → lấy `SecurityUtils.currentStaffId()`.
+   - Cập nhật thông báo thiếu định danh trong `AccountApprovalService.verifyCsManager` (bỏ nhắc `X-Staff-Id`), giữ nguyên chữ ký method và `ForbiddenException` (`403`).
+2. **`CustomerController.java`**
+   - `GET/PUT /api/customers/me`: `@PreAuthorize("hasRole('CUSTOMER')")`, bỏ `X-Customer-Id` → gọi `SecurityUtils.currentCustomerId()`.
+   - `GET /api/customers`, `GET /api/customers/{id}`: `@PreAuthorize("hasAnyRole('CS_STAFF', 'DEPT_STAFF', 'CS_MANAGER')")`.
+   - `PUT /api/customers/{id}`: `@PreAuthorize("hasAnyRole('CS_STAFF', 'CS_MANAGER')")`.
+3. **`FeedbackController.java` & `FeedbackService.java`**
+   - `POST /api/feedbacks`: `@PreAuthorize("hasRole('CUSTOMER')")`, ép `customerId` lấy từ `SecurityUtils.currentCustomerId()` (bỏ qua `request.customerId()` trong body để chống giả mạo).
+   - `GET /api/feedbacks/mine`, `GET /api/feedbacks/mine/{id}`: `@PreAuthorize("hasRole('CUSTOMER')")`, bỏ `X-Customer-Id` → gọi `SecurityUtils.currentCustomerId()`; đồng bộ lỗi thiếu `customerId` sang `ForbiddenException` (`403`).
+   - `GET /api/feedbacks`, `GET /api/feedbacks/{id}`: `@PreAuthorize("hasAnyRole('CS_STAFF', 'DEPT_STAFF', 'CS_MANAGER')")`.
+   - `GET /api/feedbacks/code/{code}`: `@PreAuthorize("hasAnyRole('CUSTOMER', 'CS_STAFF', 'DEPT_STAFF', 'CS_MANAGER')")`, kiểm tra quyền sở hữu bằng `Objects.equals(feedback.getCustomerId(), currentUser.customerId())` nếu người gọi là `CUSTOMER` (khác chủ hoặc `feedback.customerId == null` → ném `ForbiddenException` `403`).
+   - `POST /api/feedbacks/{id}/merge`: `@PreAuthorize("hasAnyRole('CS_STAFF', 'CS_MANAGER')")`, ép `staffId` lấy từ `SecurityUtils.currentStaffId()`.
+4. **`FeedbackAttachmentController.java` & `FeedbackAttachmentService.java`**
+   - Gắn `@PreAuthorize("hasAnyRole('CUSTOMER', 'CS_STAFF', 'DEPT_STAFF', 'CS_MANAGER')")`; bỏ `@RequestHeader("X-Customer-Id")` và param `uploadedById`.
+   - Truyền `SecurityUtils.currentUser()` xuống `FeedbackAttachmentService`: kiểm tra chủ sở hữu phiếu bằng `Objects.equals` khi người gọi là `CUSTOMER` (chặn upload/xem/tải tệp của phiếu người khác bằng `ForbiddenException` `403`), tự động lấy `uploadedById` từ principal.
+5. **`StaffController.java` & `FeedbackCategoryController.java`**
+   - `StaffController`: `@PreAuthorize("hasAnyRole('CS_STAFF', 'DEPT_STAFF', 'CS_MANAGER')")`.
+   - `FeedbackCategoryController`: `@PreAuthorize("hasAnyRole('CUSTOMER', 'CS_STAFF', 'DEPT_STAFF', 'CS_MANAGER')")`.
+6. **`src/test/java/com/bql/feedback/service/FeedbackSecurityAccessTests.java`** *(thêm mới)*
+   - 3 unit test xác minh: chặn `CUSTOMER` tra cứu mã phiếu của người khác / phiếu có `customerId == null` (`403`), cho phép chủ phiếu & nhân viên; `createFeedback` dùng `customerId` từ JWT bỏ qua ID giả mạo trong body; `FeedbackAttachmentService` chặn `CUSTOMER` truy cập/upload/tải tệp trên phiếu người khác (`403`) và cho phép nhân viên.
+
+### Kết quả kiểm tra
+
+- **Rà soát header cũ:** Không còn bất kỳ tham chiếu `X-Customer-Id` hay `X-Staff-Id` nào trong toàn bộ thư mục `src/`.
+- **Biên dịch:** Thành công toàn bộ **78 file** nguồn chính và **10 file** test (`BUILD SUCCESS`).
+- **Kiểm thử unit test:** **`Tests run: 44, Failures: 0, Errors: 0, Skipped: 0`** trên cả 9 test suite (`FeedbackSecurityAccessTests`: 3, `SecurityUtilsTests`: 3, `LoginAttemptServiceTests`: 2, `AuthServiceResidentRegistrationTests`: 6, `JwtAuthenticationFilterTests`: 3, `JwtServiceTests`: 6, `GlobalExceptionHandlerTests`: 3, `AccountApprovalServiceTests`: 7, `CustomerServiceProfileTests`: 11 — `BUILD SUCCESS`).
+
+---
+
+## 25. Bổ sung `PasswordMigrationRunner` (mã hóa tạm mật khẩu plain-text cũ sang BCrypt)
+
+- **Ngày:** 2026-11-27
+- **Mục tiêu:** Tự động mã hóa các mật khẩu plain-text cũ đang có trong bảng `user_accounts` sang BCrypt khi khởi động ứng dụng để các tài khoản seed trước đó đăng nhập lại được bình thường.
+- **Phạm vi:** Thêm mới **2 file** (`PasswordMigrationRunner.java`, `PasswordMigrationRunnerTests.java`).
+
+### Chi tiết thay đổi
+
+1. **`src/main/java/com/bql/feedback/security/PasswordMigrationRunner.java`** *(thêm mới — bean tạm)*
+   - `@Component` triển khai `CommandLineRunner`, chạy mặc định khi ứng dụng khởi động trong `@Transactional`.
+   - Duyệt toàn bộ `userAccountRepository.findAll()`; chỉ mã hóa các mật khẩu khác `null`/rỗng và chưa bắt đầu bằng `$2a$` / `$2b$` / `$2y$`, gom lưu qua `saveAll(...)` và ghi log SLF4J số lượng tài khoản đã migrate.
+2. **`src/test/java/com/bql/feedback/security/PasswordMigrationRunnerTests.java`** *(thêm mới)*
+   - 2 unit test xác minh: tài khoản plain-text được mã hóa BCrypt khớp mật khẩu gốc, tài khoản đã có hash BCrypt và mật khẩu `null` không bị băm lặp lại; bỏ qua `saveAll` nếu toàn bộ đã là BCrypt.
+
+### Lưu ý vận hành
+
+- **Trước khi khởi động app:** Chạy `SELECT * INTO user_accounts_backup FROM user_accounts;` trên SQL Server để sao lưu (BCrypt không giải mã ngược được).
+- **Sau khi migrate & đăng nhập test thành công:** Xóa `PasswordMigrationRunner.java` (và `PasswordMigrationRunnerTests.java`) khỏi codebase, đồng thời dọn bảng `user_accounts_backup` khi hệ thống đã ổn định.
+
+### Kết quả kiểm tra
+
+- **Biên dịch:** Thành công toàn bộ **79 file** nguồn chính và **11 file** test (`BUILD SUCCESS`).
+- **Kiểm thử unit test:** **`Tests run: 46, Failures: 0, Errors: 0, Skipped: 0`** trên cả 10 test suite (`PasswordMigrationRunnerTests`: 2, `FeedbackSecurityAccessTests`: 3, `SecurityUtilsTests`: 3, `LoginAttemptServiceTests`: 2, `AuthServiceResidentRegistrationTests`: 6, `JwtAuthenticationFilterTests`: 3, `JwtServiceTests`: 6, `GlobalExceptionHandlerTests`: 3, `AccountApprovalServiceTests`: 7, `CustomerServiceProfileTests`: 11 — `BUILD SUCCESS`).
+
+---
+
+## 26. Mở quyền đọc `StaffController` cho `CUSTOMER` phục vụ form tạo phiếu (`create-ticket.jsx`)
+
+- **Ngày:** 2026-11-27
+- **Mục tiêu:** Cho phép tài khoản `CUSTOMER` đã đăng nhập gọi `GET /api/staff` để chọn `aboutStaffId` trên form `create-ticket.jsx` (tránh lỗi `403 Forbidden`), đồng thời xác nhận `StaffResponseDto` chỉ chứa thông tin hiển thị an toàn (`id`, `fullName`, `role`, `department`, `active`, `onDuty` — không có SĐT, email hay mật khẩu).
+- **Phạm vi:** Chỉnh sửa **1 file** (`src/main/java/com/bql/feedback/controller/StaffController.java`).
+
+### Chi tiết thay đổi
+
+1. **`src/main/java/com/bql/feedback/controller/StaffController.java`** *(chỉnh sửa)*
+   - **Sửa:** Đổi `@PreAuthorize("hasAnyRole('CS_STAFF', 'DEPT_STAFF', 'CS_MANAGER')")` thành `@PreAuthorize("hasAnyRole('CUSTOMER', 'CS_STAFF', 'DEPT_STAFF', 'CS_MANAGER')")` (đồng bộ với `FeedbackCategoryController`).
+
+### Kết quả kiểm tra
+
+- **Biên dịch:** Thành công toàn bộ **79 file** nguồn chính và **11 file** test (`BUILD SUCCESS`).
+- **Kiểm thử unit test:** **`Tests run: 46, Failures: 0, Errors: 0, Skipped: 0`** trên cả 10 test suite (không có test nào bị ảnh hưởng — `BUILD SUCCESS`).
+
+---
+
+## 27. Bổ sung cấu hình môi trường test riêng (`src/test/resources/application.properties`)
+
+- **Ngày:** 2026-11-27
+- **Mục tiêu:** Tách cơ sở dữ liệu kiểm thử tích hợp sang `feedbackdb_test` với `ddl-auto=create-drop` và thư mục upload tạm `target/test-uploads` để không ảnh hưởng dữ liệu demo trong `feedbackdb`.
+- **Phạm vi:** Thêm mới **1 file** (`src/test/resources/application.properties`).
+
+### Chi tiết thay đổi
+
+1. **`src/test/resources/application.properties`** *(thêm mới)*
+   - Cấu hình SQL Server trỏ sang `databaseName=feedbackdb_test` với `spring.jpa.hibernate.ddl-auto=create-drop`.
+   - Khai báo đầy đủ toàn bộ key cấu hình cần thiết vì file này ghi đè `src/main/resources/application.properties` khi chạy test: `spring.servlet.multipart.*`, `app.upload.*` (`target/test-uploads`), `app.feedback.*`, `app.cors.*`, `app.security.jwt.*` (`secret` 40 ký tự cho HS256, `expiration-minutes=480`), `app.security.login.*` (`max-failed-attempts=5`, `lock-minutes=15`).
+
+### Lưu ý vận hành
+
+- Cần chạy sẵn `CREATE DATABASE feedbackdb_test;` trong SQL Server (SSMS) trước khi chạy các integration test dùng `@SpringBootTest`.
+
+### Kết quả kiểm tra
+
+- **Lệnh chạy:** `.\mvnw.cmd test-compile -o`
+- **Kết quả:** Copy thành công `src/test/resources/application.properties` sang `target/test-classes` và biên dịch **`BUILD SUCCESS`**.
+
+---
+
+## 28. Bổ sung `SecurityIntegrationTests` và chạy toàn bộ bộ test tích hợp với SQL Server (`feedbackdb_test`)
+
+- **Ngày:** 2026-11-27
+- **Mục tiêu:** Kiểm chứng toàn bộ chuỗi bảo mật thực tế (`@SpringBootTest` + MockMvc + `springSecurity()` + SQL Server `feedbackdb_test`): xác thực JWT (`401`), phân quyền RBAC (`403`), chống IDOR trên phiếu & tệp đính kèm, quyền đọc `GET /api/staff` & `GET /api/staff/{id}` của `CUSTOMER`, quy trình `CS_MANAGER` duyệt tài khoản `TENANT` đang `PENDING` kèm kích hoạt hợp đồng thuê để đăng nhập lấy JWT, và khóa tạm `429 Too Many Requests` kèm header `Retry-After` sau 5 lần sai mật khẩu.
+- **Phạm vi:** Thêm mới **1 file** (`src/test/java/com/bql/feedback/security/SecurityIntegrationTests.java`) và khởi tạo cơ sở dữ liệu kiểm thử riêng `feedbackdb_test` trên SQL Server (`localhost:1433`).
+
+### Chi tiết thay đổi
+
+1. **Khởi tạo DB kiểm thử `feedbackdb_test`**
+   - Thực thi `CREATE DATABASE feedbackdb_test` trên SQL Server (`localhost:1433`), tách biệt hoàn toàn với `feedbackdb`.
+2. **`src/test/java/com/bql/feedback/security/SecurityIntegrationTests.java`** *(thêm mới — 10 integration test)*
+   - Dọn sạch dữ liệu trước mỗi test qua `JdbcTemplate` theo đúng thứ tự bảng con → cha (`feedback_attachments`, `feedback_responses`, `status_histories`, `escalation_histories`, `satisfaction_ratings`, `feedback_assignments`, `feedbacks`, `rental_contracts`, `user_accounts`, `customers`, `staff`) vì `FeedbackRepository` cố ý không mở `deleteAll()`.
+   - Tạo `Customer` riêng (có đầy đủ `ResidentType`, SĐT và email duy nhất) cho từng `UserAccount` để tuân thủ filtered unique index trên SQL Server.
+   - Dọn an toàn thư mục `target/test-uploads` trong `@AfterAll` (xác minh đường dẫn kết thúc bằng `target/test-uploads` và bỏ qua `IOException` nếu file bị lock trên Windows).
+   - **10 kịch bản kiểm thử:**
+     1. `noTokenIs401`: gọi `GET /api/feedbacks/mine` không kèm token → `401` JSON `ErrorResponse`.
+     2. `customerCannotReadOthersFeedbackByCode`: cư dân A đọc phiếu của B qua `GET /api/feedbacks/code/{code}` → `403`.
+     3. `ownerCanReadOwnFeedbackByCode`: cư dân B đọc phiếu của chính mình qua `GET /api/feedbacks/code/{code}` → `200`.
+     4. `customerCannotListAllFeedbacks`: cư dân A gọi `GET /api/feedbacks` → `403`.
+     5. `customerCannotReadOthersViaMineId`: cư dân A gọi `GET /api/feedbacks/mine/{idOfB}` → `404`.
+     6. `customerCanReadStaffListAndDetail`: cư dân A gọi cả `GET /api/staff` lẫn `GET /api/staff/{id}` → `200` đúng nhân viên.
+     7. `customerCannotAccessOthersAttachments`: cư dân B upload tệp `proof.png` (`201`), cư dân A gọi xem danh sách và tải tệp đó → cả hai đều `403`.
+     8. `customerCannotCallManagerEndpoint`: cư dân A gọi `POST /api/accounts/{id}/approve` → `403`.
+     9. `csManagerCanApprovePendingTenantAndResidentCanLogin`: `CS_MANAGER` duyệt tài khoản `TENANT` đang `PENDING` → `200` (`accountStatus=APPROVED`, `verifiedResident=true`, `rentalContracts[0].status=ACTIVE`), sau đó cư dân đăng nhập ngay nhận JWT (`200`).
+     10. `lockedAfterFiveWrongPasswords`: đăng nhập sai 5 lần liên tiếp (`401`), lần thứ 6 nhập đúng mật khẩu vẫn bị khóa `429 Too Many Requests` kèm header `Retry-After`.
+
+### Kết quả kiểm tra
+
+- **Lệnh chạy:** `.\mvnw.cmd test -o` (chạy đầy đủ toàn bộ 12 test suite, bao gồm `@SpringBootTest` kết nối SQL Server `feedbackdb_test`).
+- **Biên dịch:** Thành công toàn bộ **79 file** nguồn chính và **12 file** test.
+- **Kiểm thử toàn bộ dự án:** **`Tests run: 57, Failures: 0, Errors: 0, Skipped: 0`** (**`BUILD SUCCESS`**)
+  - `SecurityIntegrationTests`: 10
+  - `CustomerServiceProfileTests`: 11
+  - `AccountApprovalServiceTests`: 7
+  - `AuthServiceResidentRegistrationTests`: 6
+  - `JwtServiceTests`: 6
+  - `FeedbackSecurityAccessTests`: 3
+  - `GlobalExceptionHandlerTests`: 3
+  - `JwtAuthenticationFilterTests`: 3
+  - `SecurityUtilsTests`: 3
+  - `LoginAttemptServiceTests`: 2
+  - `PasswordMigrationRunnerTests`: 2
+  - `FeedbackApplicationTests`: 1

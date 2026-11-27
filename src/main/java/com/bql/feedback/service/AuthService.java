@@ -2,10 +2,11 @@ package com.bql.feedback.service;
 
 import com.bql.feedback.dto.LoginRequestDto;
 import com.bql.feedback.dto.LoginResponseDto;
-import com.bql.feedback.dto.RentalContractResponseDto;
 import com.bql.feedback.dto.RegisterRequestDto;
+import com.bql.feedback.dto.RentalContractResponseDto;
 import com.bql.feedback.exception.BusinessException;
 import com.bql.feedback.exception.NotFoundException;
+import com.bql.feedback.exception.UnauthorizedException;
 import com.bql.feedback.model.AccountStatus;
 import com.bql.feedback.model.Customer;
 import com.bql.feedback.model.RentalContract;
@@ -18,32 +19,45 @@ import com.bql.feedback.repository.CustomerRepository;
 import com.bql.feedback.repository.RentalContractRepository;
 import com.bql.feedback.repository.StaffRepository;
 import com.bql.feedback.repository.UserAccountRepository;
+import com.bql.feedback.security.JwtService;
+import com.bql.feedback.security.LoginAttemptService;
 import com.bql.feedback.util.ContactValidationUtil;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Objects;
 
 @Service
 public class AuthService {
+
+    private static final String INVALID_CREDENTIALS_MESSAGE = "Tên đăng nhập hoặc mật khẩu không đúng";
 
     private final UserAccountRepository userAccountRepository;
     private final CustomerRepository customerRepository;
     private final RentalContractRepository rentalContractRepository;
     private final StaffRepository staffRepository;
+    private final PasswordEncoder passwordEncoder;
+    private final JwtService jwtService;
+    private final LoginAttemptService loginAttemptService;
 
     public AuthService(
             UserAccountRepository userAccountRepository,
             CustomerRepository customerRepository,
             RentalContractRepository rentalContractRepository,
-            StaffRepository staffRepository
+            StaffRepository staffRepository,
+            PasswordEncoder passwordEncoder,
+            JwtService jwtService,
+            LoginAttemptService loginAttemptService
     ) {
         this.userAccountRepository = userAccountRepository;
         this.customerRepository = customerRepository;
         this.rentalContractRepository = rentalContractRepository;
         this.staffRepository = staffRepository;
+        this.passwordEncoder = passwordEncoder;
+        this.jwtService = jwtService;
+        this.loginAttemptService = loginAttemptService;
     }
 
     @Transactional
@@ -58,11 +72,15 @@ public class AuthService {
             throw new BusinessException("Mật khẩu không được để trống");
         }
 
-        UserAccount account = userAccountRepository.findByUsername(request.username().trim())
-                .orElseThrow(() -> new BusinessException("Tên đăng nhập hoặc mật khẩu không đúng"));
+        String username = request.username().trim();
+        loginAttemptService.checkAllowed(username);
 
-        if (!Objects.equals(account.getPassword(), request.password())) {
-            throw new BusinessException("Tên đăng nhập hoặc mật khẩu không đúng");
+        UserAccount account = userAccountRepository.findByUsername(username).orElse(null);
+        if (account == null
+                || account.getPassword() == null
+                || !passwordEncoder.matches(request.password(), account.getPassword())) {
+            loginAttemptService.recordFailure(username);
+            throw new UnauthorizedException(INVALID_CREDENTIALS_MESSAGE);
         }
 
         if (account.getAccountStatus() == AccountStatus.PENDING) {
@@ -105,14 +123,25 @@ public class AuthService {
             department = staff.getDepartment() != null ? staff.getDepartment().name() : null;
         }
 
+        loginAttemptService.recordSuccess(username);
+
         LocalDateTime now = LocalDateTime.now();
         account.setLastLoginAt(now);
         UserAccount saved = userAccountRepository.save(account);
 
+        String roleName = saved.getRole() != null ? saved.getRole().name() : null;
+        String token = jwtService.generateToken(
+                saved.getId(),
+                saved.getUsername(),
+                roleName,
+                saved.getCustomerId(),
+                saved.getStaffId()
+        );
+
         return new LoginResponseDto(
                 saved.getId(),
                 saved.getUsername(),
-                saved.getRole() != null ? saved.getRole().name() : null,
+                roleName,
                 saved.getCustomerId(),
                 saved.getStaffId(),
                 fullName,
@@ -122,11 +151,12 @@ public class AuthService {
                 saved.getLastLoginAt(),
                 residentType,
                 saved.getAccountStatus().name(),
-                rentalContracts
+                rentalContracts,
+                token
         );
     }
 
-    // Đăng ký tài khoản chủ căn hộ hoặc người thuê.
+    // Đăng ký tài khoản chủ căn hộ hoặc người thuê (mã hóa BCrypt, token = null do đang PENDING).
     @Transactional
     public LoginResponseDto registerCustomer(RegisterRequestDto request) {
         if (request == null) {
@@ -186,7 +216,7 @@ public class AuthService {
         UserAccount account = new UserAccount(
                 null,
                 username,
-                request.password(),
+                passwordEncoder.encode(request.password()),
                 Role.CUSTOMER,
                 savedCustomer.getId(),
                 null,
@@ -209,7 +239,8 @@ public class AuthService {
                 savedAccount.getLastLoginAt(),
                 savedCustomer.getResidentType().name(),
                 savedAccount.getAccountStatus().name(),
-                getRentalContractDtos(savedCustomer.getId())
+                getRentalContractDtos(savedCustomer.getId()),
+                null
         );
     }
 

@@ -2,10 +2,14 @@ package com.bql.feedback.service;
 
 import com.bql.feedback.dto.FeedbackAttachmentResponseDto;
 import com.bql.feedback.exception.BusinessException;
+import com.bql.feedback.exception.ForbiddenException;
 import com.bql.feedback.exception.NotFoundException;
+import com.bql.feedback.model.Feedback;
 import com.bql.feedback.model.FeedbackAttachment;
 import com.bql.feedback.repository.FeedbackAttachmentRepository;
 import com.bql.feedback.repository.FeedbackRepository;
+import com.bql.feedback.security.AuthenticatedUser;
+import com.bql.feedback.security.SecurityUtils;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
@@ -24,6 +28,7 @@ import java.nio.file.StandardCopyOption;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
@@ -61,10 +66,12 @@ public class FeedbackAttachmentService {
     public record AttachmentDownload(Resource resource, String fileName, String contentType) {
     }
 
-    // 1. Upload tệp đính kèm cho phiếu (tối đa 5 file/phiếu, 10MB/file)
+    // 1. Upload tệp đính kèm cho phiếu (tối đa 5 file/phiếu, 10MB/file; CUSTOMER chỉ upload vào phiếu của mình)
     @Transactional
-    public FeedbackAttachmentResponseDto uploadAttachment(Long feedbackId, MultipartFile file, Long uploadedById) {
-        ensureFeedbackExists(feedbackId);
+    public FeedbackAttachmentResponseDto uploadAttachment(Long feedbackId,
+                                                          MultipartFile file,
+                                                          AuthenticatedUser currentUser) {
+        ensureFeedbackAccessible(feedbackId, currentUser);
 
         if (file == null || file.isEmpty()) {
             throw new BusinessException("Tệp đính kèm không được để trống");
@@ -106,6 +113,7 @@ public class FeedbackAttachmentService {
             throw new RuntimeException("Không thể lưu tệp đính kèm", ex);
         }
 
+        Long uploadedById = resolveActorId(currentUser);
         try {
             FeedbackAttachment attachment = new FeedbackAttachment(
                     null,
@@ -129,8 +137,9 @@ public class FeedbackAttachmentService {
     }
 
     // 2. Lấy danh sách tệp đính kèm của 1 phiếu
-    public List<FeedbackAttachmentResponseDto> getAttachmentsByFeedbackId(Long feedbackId) {
-        ensureFeedbackExists(feedbackId);
+    public List<FeedbackAttachmentResponseDto> getAttachmentsByFeedbackId(Long feedbackId,
+                                                                          AuthenticatedUser currentUser) {
+        ensureFeedbackAccessible(feedbackId, currentUser);
         return attachmentRepository.findByFeedbackId(feedbackId)
                 .stream()
                 .map(this::toDto)
@@ -138,8 +147,10 @@ public class FeedbackAttachmentService {
     }
 
     // 3. Tải/xem nội dung tệp đính kèm
-    public AttachmentDownload loadAttachment(Long feedbackId, Long attachmentId) {
-        ensureFeedbackExists(feedbackId);
+    public AttachmentDownload loadAttachment(Long feedbackId,
+                                             Long attachmentId,
+                                             AuthenticatedUser currentUser) {
+        ensureFeedbackAccessible(feedbackId, currentUser);
 
         FeedbackAttachment attachment = attachmentRepository.findById(attachmentId)
                 .filter(a -> feedbackId.equals(a.getFeedbackId()))
@@ -162,9 +173,29 @@ public class FeedbackAttachmentService {
         }
     }
 
-    private void ensureFeedbackExists(Long feedbackId) {
-        feedbackRepository.findByIdAndDeletedAtIsNull(feedbackId)
+    private void ensureFeedbackAccessible(Long feedbackId, AuthenticatedUser currentUser) {
+        Feedback feedback = feedbackRepository.findByIdAndDeletedAtIsNull(feedbackId)
                 .orElseThrow(() -> new NotFoundException("Không tìm thấy phiếu với ID: " + feedbackId));
+
+        if (currentUser != null && !SecurityUtils.isStaff(currentUser)) {
+            if (currentUser.customerId() == null
+                    || !Objects.equals(feedback.getCustomerId(), currentUser.customerId())) {
+                throw new ForbiddenException("Bạn không có quyền truy cập tệp đính kèm của phiếu này");
+            }
+        }
+    }
+
+    private Long resolveActorId(AuthenticatedUser currentUser) {
+        if (currentUser == null) {
+            return null;
+        }
+        if ("CUSTOMER".equals(currentUser.role()) && currentUser.customerId() != null) {
+            return currentUser.customerId();
+        }
+        if (SecurityUtils.isStaff(currentUser) && currentUser.staffId() != null) {
+            return currentUser.staffId();
+        }
+        return currentUser.accountId();
     }
 
     private String sanitizeFileName(String rawName) {
