@@ -582,3 +582,44 @@ Các cột đa hình `uploaded_by_id`, `author_id`, `changed_by_id` không có F
 
 - **Biên dịch:** Thành công toàn bộ **66 file** nguồn chính và **3 file** test (`BUILD SUCCESS`).
 - **Kiểm thử unit test:** `.\mvnw.cmd test -o -Dtest=CustomerServiceProfileTests,AuthServiceResidentRegistrationTests` → **`Tests run: 15, Failures: 0, Errors: 0, Skipped: 0`** (`CustomerServiceProfileTests`: 11 passed, `AuthServiceResidentRegistrationTests`: 4 passed, `BUILD SUCCESS`).
+
+---
+
+## 16. Bổ sung API duyệt / từ chối tài khoản cư dân (`/api/accounts/**`, chỉ `CS_MANAGER`)
+
+- **Ngày:** 2026-11-27
+- **Mục tiêu:** Cung cấp luồng quản trị duyệt/từ chối tài khoản cư dân đang ở trạng thái `PENDING` (`PENDING` → `APPROVED` / `REJECTED`), chỉ cho phép `CS_MANAGER` đang hoạt động thực hiện, đồng bộ trạng thái `verifiedResident`, `active` và hợp đồng thuê `RentalContract`, đồng thời tránh N+1 query khi xem danh sách chờ duyệt.
+- **Phạm vi:** Thêm mới **5 file** (`ForbiddenException.java`, `AccountApprovalResponseDto.java`, `AccountApprovalService.java`, `AccountApprovalController.java`, `AccountApprovalServiceTests.java`), chỉnh sửa **3 file** (`GlobalExceptionHandler.java`, `UserAccountRepository.java`, `RentalContractRepository.java`).
+
+### Chi tiết thay đổi
+
+1. **`src/main/java/com/bql/feedback/exception/ForbiddenException.java`** *(thêm mới)* & **`GlobalExceptionHandler.java`** *(chỉnh sửa)*
+   - Bổ sung ngoại lệ `ForbiddenException` và handler trả HTTP **`403 Forbidden`** đúng chuẩn `ErrorResponse`.
+2. **`src/main/java/com/bql/feedback/repository/UserAccountRepository.java`** *(chỉnh sửa)*
+   - **Thêm:** `List<UserAccount> findByRoleAndAccountStatusOrderByCreatedAtAsc(Role role, AccountStatus accountStatus);`
+3. **`src/main/java/com/bql/feedback/repository/RentalContractRepository.java`** *(chỉnh sửa)*
+   - **Thêm:** `List<RentalContract> findByTenantCustomerIdInOrderByStartDateDesc(Collection<Long> tenantCustomerIds);` phục vụ truy vấn gom theo lô.
+4. **`src/main/java/com/bql/feedback/dto/AccountApprovalResponseDto.java`** *(thêm mới)*
+   - Record trả về thông tin tài khoản, hồ sơ cư dân và danh sách hợp đồng thuê (không trả `password`).
+5. **`src/main/java/com/bql/feedback/service/AccountApprovalService.java`** *(thêm mới)*
+   - **Phân quyền:** Kiểm tra `staffId` từ `StaffRepository` phải tồn tại, `active = true` và có `role == Role.CS_MANAGER`; mọi vai trò khác (`CS_STAFF`, `DEPT_STAFF`, `CUSTOMER`...) bị chặn bằng `ForbiddenException` (`403`). *(Khi nâng cấp Spring Security + JWT, chỉ cần thêm `@PreAuthorize("hasRole('CS_MANAGER')")` ở Controller và đọc `staffId` từ SecurityContext.)*
+   - **`getPendingAccounts(Long staffId)`:** Query đúng 3 lượt theo lô (`findByRoleAndAccountStatusOrderByCreatedAtAsc` → `customerRepository.findAllById(customerIds)` → `rentalContractRepository.findByTenantCustomerIdInOrderByStartDateDesc(customerIds)`) rồi map theo `Map<Long, ...>` để tránh hoàn toàn N+1 query.
+   - **`approve(Long accountId, Long staffId)` (`@Transactional`):**
+     - Chỉ duyệt tài khoản `Role.CUSTOMER` đang `PENDING`.
+     - Với `ResidentType.TENANT`: bắt buộc phải có hợp đồng `PENDING` và **chặn duyệt bằng `BusinessException`** nếu hợp đồng đã hết hạn (`endDate < LocalDate.now()`); nếu hợp lệ thì chuyển hợp đồng `PENDING` → `ACTIVE`.
+     - Đặt `Customer` (`verifiedResident = true`, `active = true`) và `UserAccount` (`accountStatus = APPROVED`, `active = true`).
+   - **`reject(Long accountId, Long staffId)` (`@Transactional`):**
+     - Chỉ từ chối tài khoản `Role.CUSTOMER` đang `PENDING`.
+     - Đặt `Customer` (`verifiedResident = false`, `active = false`), `UserAccount` (`accountStatus = REJECTED`, `active = false`), và chuyển các hợp đồng `PENDING` của `TENANT` sang `TERMINATED`.
+6. **`src/main/java/com/bql/feedback/controller/AccountApprovalController.java`** *(thêm mới)*
+   - Cung cấp 3 endpoint dưới `/api/accounts` (nhận Header `X-Staff-Id`):
+     - `GET /api/accounts/pending`
+     - `POST /api/accounts/{accountId}/approve`
+     - `POST /api/accounts/{accountId}/reject`
+7. **`src/test/java/com/bql/feedback/service/AccountApprovalServiceTests.java`** *(thêm mới)*
+   - 7 unit test kiểm thử: phân quyền chặt chỉ `CS_MANAGER` active (`403` cho `CS_STAFF`/`DEPT_STAFF`/inactive/unknown), duyệt `OWNER`, duyệt `TENANT` kích hoạt hợp đồng hợp lệ, chặn duyệt `TENANT` khi hợp đồng hết hạn (không lưu DB), từ chối `TENANT` hủy hợp đồng & set inactive, chặn duyệt tài khoản không phải `PENDING`/tài khoản Staff/`404`, và xác minh `getPendingAccounts` dùng batch query không phát sinh N+1.
+
+### Kết quả kiểm tra
+
+- **Biên dịch:** Thành công toàn bộ **70 file** nguồn chính và **4 file** test (`BUILD SUCCESS`).
+- **Kiểm thử unit test:** `.\mvnw.cmd test -o -Dtest=AccountApprovalServiceTests,CustomerServiceProfileTests,AuthServiceResidentRegistrationTests` → **`Tests run: 22, Failures: 0, Errors: 0, Skipped: 0`** (`AccountApprovalServiceTests`: 7 passed, `CustomerServiceProfileTests`: 11 passed, `AuthServiceResidentRegistrationTests`: 4 passed, `BUILD SUCCESS`).
