@@ -3,6 +3,8 @@ package com.bql.feedback.config;
 import com.bql.feedback.exception.ErrorResponse;
 import com.bql.feedback.security.JwtAuthenticationFilter;
 import com.bql.feedback.security.JwtService;
+import com.bql.feedback.security.RateLimitFilter;
+import org.springframework.beans.factory.annotation.Value;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -37,7 +39,12 @@ public class SecurityConfig {
     }
 
     @Bean
-    SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+    SecurityFilterChain filterChain(
+            HttpSecurity http,
+            @Value("${app.security.rate-limit.auth-per-minute:10}") int authPerMinute,
+            @Value("${app.security.rate-limit.feedback-per-minute:20}") int feedbackPerMinute,
+            @Value("${app.security.rate-limit.trust-forwarded-for:false}") boolean trustForwardedFor
+    ) throws Exception {
         http
                 .csrf(AbstractHttpConfigurer::disable)
                 .cors(Customizer.withDefaults())
@@ -54,7 +61,10 @@ public class SecurityConfig {
                                 writeErrorResponse(res, HttpStatus.FORBIDDEN,
                                         "Bạn không có quyền thực hiện thao tác này")))
                 .addFilterBefore(new JwtAuthenticationFilter(jwtService),
-                        UsernamePasswordAuthenticationFilter.class);
+                        UsernamePasswordAuthenticationFilter.class)
+                // IA-CF05: rate limit chạy TRƯỚC JWT để request spam bị chặn sớm
+                .addFilterBefore(new RateLimitFilter(authPerMinute, feedbackPerMinute, trustForwardedFor),
+                        JwtAuthenticationFilter.class);
         return http.build();
     }
 
