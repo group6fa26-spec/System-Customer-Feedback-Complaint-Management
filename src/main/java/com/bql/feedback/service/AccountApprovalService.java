@@ -167,7 +167,7 @@ public class AccountApprovalService {
 
     private void verifyCsManager(Long staffId) {
         if (staffId == null) {
-            throw new ForbiddenException("Thiếu thông tin định danh quản lý (X-Staff-Id)");
+            throw new ForbiddenException("Thiếu thông tin định danh quản lý");
         }
         Staff staff = staffRepository.findById(staffId)
                 .orElseThrow(() -> new ForbiddenException("Không có quyền truy cập chức năng duyệt tài khoản"));

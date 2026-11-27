@@ -4,6 +4,7 @@ import com.bql.feedback.dto.CreateFeedbackRequestDto;
 import com.bql.feedback.dto.FeedbackResponseDto;
 import com.bql.feedback.dto.MergeFeedbackRequestDto;
 import com.bql.feedback.exception.BusinessException;
+import com.bql.feedback.exception.ForbiddenException;
 import com.bql.feedback.exception.NotFoundException;
 import com.bql.feedback.model.ClassifiedBy;
 import com.bql.feedback.model.Customer;
@@ -17,6 +18,8 @@ import com.bql.feedback.repository.CustomerRepository;
 import com.bql.feedback.repository.FeedbackCategoryRepository;
 import com.bql.feedback.repository.FeedbackRepository;
 import com.bql.feedback.repository.StatusHistoryRepository;
+import com.bql.feedback.security.AuthenticatedUser;
+import com.bql.feedback.security.SecurityUtils;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -84,20 +87,27 @@ public class FeedbackService {
         return toDto(feedback, List.of());
     }
 
-    // 3. Tra cứu phiếu theo mã (FB-yyyyMMdd-0001)
-    public FeedbackResponseDto getFeedbackByCode(String code) {
+    // 3. Tra cứu phiếu theo mã (CUSTOMER chỉ được xem phiếu của chính mình)
+    public FeedbackResponseDto getFeedbackByCode(String code, AuthenticatedUser currentUser) {
         if (code == null || code.isBlank()) {
             throw new BusinessException("Mã phiếu không được để trống");
         }
         Feedback feedback = feedbackRepository.findByCodeAndDeletedAtIsNull(code.trim())
                 .orElseThrow(() -> new NotFoundException("Không tìm thấy phiếu với mã: " + code));
+
+        if (currentUser != null && !SecurityUtils.isStaff(currentUser)) {
+            if (currentUser.customerId() == null
+                    || !Objects.equals(feedback.getCustomerId(), currentUser.customerId())) {
+                throw new ForbiddenException("Bạn không có quyền xem phiếu phản hồi này");
+            }
+        }
         return toDto(feedback, List.of());
     }
 
     // 4. Cư dân xem danh sách phiếu của chính mình (CF13)
     public Page<FeedbackResponseDto> getMyFeedbacks(Long customerId, Pageable pageable) {
         if (customerId == null) {
-            throw new BusinessException("Thiếu header X-Customer-Id");
+            throw new ForbiddenException("Tài khoản không phải cư dân");
         }
         return feedbackRepository.findByCustomerIdAndDeletedAtIsNull(customerId, pageable)
                 .map(f -> toDto(f, List.of()));
@@ -106,7 +116,7 @@ public class FeedbackService {
     // 5. Cư dân xem chi tiết 1 phiếu của chính mình (CF13)
     public FeedbackResponseDto getMyFeedbackById(Long id, Long customerId) {
         if (customerId == null) {
-            throw new BusinessException("Thiếu header X-Customer-Id");
+            throw new ForbiddenException("Tài khoản không phải cư dân");
         }
         Feedback feedback = feedbackRepository.findByIdAndCustomerIdAndDeletedAtIsNull(id, customerId)
                 .orElseThrow(() -> new NotFoundException(
@@ -114,14 +124,17 @@ public class FeedbackService {
         return toDto(feedback, List.of());
     }
 
-    // 6. Tạo mới phiếu phản hồi/khiếu nại
+    // 6. Tạo mới phiếu phản hồi/khiếu nại (ép customerId từ JWT, không tin body)
     @Transactional
-    public CreateFeedbackResult createFeedback(CreateFeedbackRequestDto request) {
+    public CreateFeedbackResult createFeedback(Long authenticatedCustomerId, CreateFeedbackRequestDto request) {
+        if (authenticatedCustomerId == null) {
+            throw new ForbiddenException("Tài khoản không phải cư dân");
+        }
         validateCreateRequest(request);
 
-        Customer customer = customerRepository.findById(request.customerId())
+        Customer customer = customerRepository.findById(authenticatedCustomerId)
                 .orElseThrow(() -> new NotFoundException(
-                        "Không tìm thấy cư dân với ID: " + request.customerId()));
+                        "Không tìm thấy cư dân với ID: " + authenticatedCustomerId));
 
         if (!customer.canSubmit()) {
             throw new BusinessException(
@@ -202,9 +215,14 @@ public class FeedbackService {
         return new CreateFeedbackResult(toDto(saved, suspectedDuplicateIds), false);
     }
 
-    // 7. CS duyệt gộp phiếu trùng vào phiếu gốc (Mức 2)
+    // 7. CS duyệt gộp phiếu trùng vào phiếu gốc (Mức 2, staffId lấy từ JWT)
     @Transactional
-    public FeedbackResponseDto mergeDuplicateFeedback(Long duplicateId, MergeFeedbackRequestDto request) {
+    public FeedbackResponseDto mergeDuplicateFeedback(Long duplicateId,
+                                                      Long authenticatedStaffId,
+                                                      MergeFeedbackRequestDto request) {
+        if (authenticatedStaffId == null) {
+            throw new ForbiddenException("Tài khoản không phải nhân viên");
+        }
         if (request == null || request.originalFeedbackId() == null) {
             throw new BusinessException("originalFeedbackId là bắt buộc");
         }
@@ -240,7 +258,7 @@ public class FeedbackService {
                 savedDuplicate.getId(),
                 previousStatus,
                 savedDuplicate.getStatus(),
-                request.staffId(),
+                authenticatedStaffId,
                 Role.CS_STAFF,
                 note,
                 now
@@ -252,9 +270,6 @@ public class FeedbackService {
     private void validateCreateRequest(CreateFeedbackRequestDto request) {
         if (request == null) {
             throw new BusinessException("Dữ liệu yêu cầu không được rỗng");
-        }
-        if (request.customerId() == null) {
-            throw new BusinessException("customerId là bắt buộc");
         }
         if (request.type() == null) {
             throw new BusinessException("type là bắt buộc");
