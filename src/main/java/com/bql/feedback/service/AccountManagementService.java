@@ -142,7 +142,7 @@ public class AccountManagementService {
 
         UserAccount existing = userAccountRepository.findByUsername(username).orElse(null);
         if (existing != null) {
-            if (existing.isDeleted()) {
+            if (Boolean.TRUE.equals(existing.getDeleted())) {
                 throw new BusinessException("Tên đăng nhập đã thuộc về tài khoản bị xóa mềm, hãy khôi phục thay vì tạo mới");
             }
             throw new BusinessException("Tên đăng nhập đã tồn tại");
@@ -189,7 +189,7 @@ public class AccountManagementService {
         }
 
         UserAccount account = loadManagedAccount(accountId);
-        if (account.isDeleted()) {
+        if (Boolean.TRUE.equals(account.getDeleted())) {
             throw new BusinessException("Không thể chỉnh sửa tài khoản đã bị xóa mềm, hãy khôi phục trước");
         }
 
@@ -271,7 +271,7 @@ public class AccountManagementService {
     public AccountManagementResponseDto blockAccount(Long managerStaffId, Long accountId) {
         verifyCsManager(managerStaffId);
         UserAccount account = loadManagedAccount(accountId);
-        if (account.isDeleted()) {
+        if (Boolean.TRUE.equals(account.getDeleted())) {
             throw new BusinessException("Tài khoản đã bị xóa mềm, không thể khóa");
         }
 
@@ -302,7 +302,7 @@ public class AccountManagementService {
     public AccountManagementResponseDto unblockAccount(Long managerStaffId, Long accountId) {
         verifyCsManager(managerStaffId);
         UserAccount account = loadManagedAccount(accountId);
-        if (account.isDeleted()) {
+        if (Boolean.TRUE.equals(account.getDeleted())) {
             throw new BusinessException("Tài khoản đã bị xóa mềm, hãy khôi phục thay vì mở khóa");
         }
         if (account.getAccountStatus() == AccountStatus.PENDING || account.getAccountStatus() == AccountStatus.REJECTED) {
@@ -341,7 +341,7 @@ public class AccountManagementService {
     ) {
         verifyCsManager(managerStaffId);
         UserAccount account = loadManagedAccount(accountId);
-        if (account.isDeleted()) {
+        if (Boolean.TRUE.equals(account.getDeleted())) {
             throw new BusinessException("Không thể đặt lại mật khẩu cho tài khoản đã bị xóa mềm");
         }
 
@@ -360,7 +360,7 @@ public class AccountManagementService {
     public AccountManagementResponseDto softDeleteAccount(Long managerStaffId, Long accountId) {
         verifyCsManager(managerStaffId);
         UserAccount account = loadManagedAccount(accountId);
-        if (account.isDeleted()) {
+        if (Boolean.TRUE.equals(account.getDeleted())) {
             throw new BusinessException("Tài khoản đã bị xóa mềm trước đó");
         }
 
@@ -395,7 +395,7 @@ public class AccountManagementService {
     public AccountManagementResponseDto restoreAccount(Long managerStaffId, Long accountId) {
         verifyCsManager(managerStaffId);
         UserAccount account = loadManagedAccount(accountId);
-        if (!account.isDeleted()) {
+        if (!Boolean.TRUE.equals(account.getDeleted())) {
             throw new BusinessException("Tài khoản chưa bị xóa mềm");
         }
 
@@ -554,7 +554,7 @@ public class AccountManagementService {
                 account.getAccountStatus().name(),
                 account.isActive(),
                 account.isMustChangePassword(),
-                account.isDeleted(),
+                Boolean.TRUE.equals(account.getDeleted()),
                 account.getDeletedAt(),
                 account.getStaffId(),
                 account.getCustomerId(),

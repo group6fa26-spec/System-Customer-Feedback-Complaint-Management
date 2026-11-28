@@ -87,6 +87,10 @@ public class FeedbackService {
         return toDto(feedback, List.of());
     }
 
+    public FeedbackResponseDto toResponseDto(Feedback feedback) {
+        return toDto(feedback, List.of());
+    }
+
     // 3. Tra cứu phiếu theo mã (CUSTOMER chỉ được xem phiếu của chính mình)
     public FeedbackResponseDto getFeedbackByCode(String code, AuthenticatedUser currentUser) {
         if (code == null || code.isBlank()) {
